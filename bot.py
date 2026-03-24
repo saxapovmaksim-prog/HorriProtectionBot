@@ -18,9 +18,9 @@ TOKEN = "8768850938:AAGXlxCENVXIqUXAJMBG2bl2xgUwNAJOc4Q"
 ADMIN_ID = 2032012311
 DATA_FILE = "bot_data.json"
 
-data = {"groups": {}, "admins": [ADMIN_ID]}
+data = {"groups": {}}
 user_messages = defaultdict(list)
-pending_links = {}
+user_states = {}  # для ввода ID
 
 # ---------- DATA ----------
 def load_data():
@@ -37,10 +37,10 @@ def get_group(chat_id):
     cid = str(chat_id)
     if cid not in data["groups"]:
         data["groups"][cid] = {
-            "tariff": "free",
             "flood_limit": 5,
             "flood_window": 10,
-            "admins": [],
+            "links": True,
+            "files": False
         }
         save_data()
     return data["groups"][cid]
@@ -60,17 +60,6 @@ def is_flood(user_id, chat_id):
 
     return len(msgs) > settings["flood_limit"]
 
-async def restrict(chat_id, user_id, context):
-    try:
-        await context.bot.restrict_chat_member(
-            chat_id,
-            user_id,
-            permissions=ChatPermissions(can_send_messages=False),
-            until_date=datetime.now() + timedelta(seconds=60)
-        )
-    except:
-        pass
-
 # ---------- CORE ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -81,60 +70,70 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if chat.type in ("group", "supergroup"):
-        group = get_group(chat.id)
+        get_group(chat.id)
+
+    # обработка ввода ID
+    if user.id in user_states:
+        state = user_states[user.id]
+
+        if state == "await_group_id":
+            try:
+                chat_id = int(msg.text)
+
+                chat_obj = await context.bot.get_chat(chat_id)
+
+                admins = await context.bot.get_chat_administrators(chat_id)
+
+                owner = None
+                admin_list = []
+
+                for a in admins:
+                    if a.status == "creator":
+                        owner = a.user.id
+                    else:
+                        admin_list.append(a.user.id)
+
+                text = (
+                    f"📊 Информация о группе\n"
+                    f"Название: {chat_obj.title}\n"
+                    f"ID: {chat_id}\n\n"
+                    f"👑 Владелец: {owner}\n"
+                    f"🛡 Админы: {admin_list}\n"
+                )
+
+                await msg.reply_text(text)
+
+            except Exception as e:
+                await msg.reply_text(f"Ошибка: {e}")
+
+            del user_states[user.id]
+        return
 
     if not user or user.is_bot:
         return
 
-    # антифлуд
+    settings = get_group(chat.id)
+
     if is_flood(user.id, chat.id):
-        await restrict(chat.id, user.id, context)
+        await msg.delete()
         return
 
-    # ссылки
-    if msg.text and contains_link(msg.text):
+    if msg.text and contains_link(msg.text) and settings["links"]:
         await msg.delete()
+        await context.bot.send_message(chat.id, "🔍 Ссылка на проверке")
 
-        link_id = f"{chat.id}_{user.id}_{int(datetime.now().timestamp())}"
-        pending_links[link_id] = {
-            "chat_id": chat.id,
-            "user_id": user.id,
-            "text": msg.text
-        }
+    if settings["files"]:
+        if msg.document or msg.video or msg.photo:
+            await msg.delete()
+            await context.bot.send_message(chat.id, "📁 Файл на проверке")
 
-        # уведомление в группе
-        await context.bot.send_message(
-            chat.id,
-            "🔍 Ссылка отправлена на проверку"
-        )
-
-        # отправка админам группы
-        for admin_id in group["admins"]:
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{link_id}"),
-                    InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_{link_id}")
-                ]
-            ]
-
-            try:
-                await context.bot.send_message(
-                    admin_id,
-                    f"Проверка ссылки:\n{msg.text}\nОт: {user.id}",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            except:
-                pass
-
-# ---------- МЕНЮ ----------
+# ---------- UI ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📋 Группы", callback_data="groups")],
         [InlineKeyboardButton("⚙️ Настройки", callback_data="settings")],
+        [InlineKeyboardButton("👑 Админ панель", callback_data="admin")]
     ]
-
-    if update.effective_user.id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton("👑 Админ панель", callback_data="admin")])
 
     await update.message.reply_text(
         "Главное меню:",
@@ -152,80 +151,76 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = []
         for gid in data["groups"]:
             keyboard.append([
-                InlineKeyboardButton(f"Группа {gid}", callback_data=f"group_{gid}")
+                InlineKeyboardButton(f"{gid}", callback_data=f"group_{gid}")
             ])
-        await query.edit_message_text("Твои группы:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # выбор группы
+        await query.edit_message_text("Группы:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # управление группой
     elif data_cb.startswith("group_"):
-        chat_id = int(data_cb.split("_")[1])
-        keyboard = [
-            [InlineKeyboardButton("Антиспам", callback_data=f"spam_{chat_id}")],
-            [InlineKeyboardButton("Админы", callback_data=f"admins_{chat_id}")]
-        ]
-        await query.edit_message_text("Управление группой:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    # антиспам настройки
-    elif data_cb.startswith("spam_"):
         chat_id = int(data_cb.split("_")[1])
         settings = get_group(chat_id)
 
-        text = f"Антиспам:\nЛимит: {settings['flood_limit']}\nОкно: {settings['flood_window']} сек"
+        text = (
+            f"Группа {chat_id}\n"
+            f"Антиспам: {settings['flood_limit']}/{settings['flood_window']}\n"
+            f"Ссылки: {settings['links']}\n"
+            f"Файлы: {settings['files']}"
+        )
 
         keyboard = [
-            [InlineKeyboardButton("+1 лимит", callback_data=f"inc_limit_{chat_id}")],
-            [InlineKeyboardButton("+5 сек", callback_data=f"inc_time_{chat_id}")]
+            [InlineKeyboardButton("➕ Лимит", callback_data=f"limit_{chat_id}")],
+            [InlineKeyboardButton("⏱ Окно", callback_data=f"time_{chat_id}")],
+            [InlineKeyboardButton("🔗 Ссылки ON/OFF", callback_data=f"links_{chat_id}")],
+            [InlineKeyboardButton("📁 Файлы ON/OFF", callback_data=f"files_{chat_id}")]
         ]
 
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif data_cb.startswith("inc_limit_"):
-        chat_id = int(data_cb.split("_")[2])
+    # изменение лимита
+    elif data_cb.startswith("limit_"):
+        chat_id = int(data_cb.split("_")[1])
         get_group(chat_id)["flood_limit"] += 1
         save_data()
         await query.answer("Лимит увеличен")
 
-    elif data_cb.startswith("inc_time_"):
-        chat_id = int(data_cb.split("_")[2])
+    # изменение окна
+    elif data_cb.startswith("time_"):
+        chat_id = int(data_cb.split("_")[1])
         get_group(chat_id)["flood_window"] += 5
         save_data()
         await query.answer("Окно увеличено")
 
-    # админы группы
-    elif data_cb.startswith("admins_"):
+    # toggle ссылки
+    elif data_cb.startswith("links_"):
         chat_id = int(data_cb.split("_")[1])
-        group = get_group(chat_id)
+        g = get_group(chat_id)
+        g["links"] = not g["links"]
+        save_data()
+        await query.answer("Переключено")
 
-        text = "Админы:\n" + "\n".join(map(str, group["admins"]))
-        await query.edit_message_text(text)
-
-    # одобрение
-    elif data_cb.startswith("approve_"):
-        link_id = data_cb.split("_", 1)[1]
-
-        if link_id in pending_links:
-            info = pending_links[link_id]
-
-            await context.bot.send_message(
-                info["chat_id"],
-                f"✅ Одобрено:\n{info['text']}\nID: {info['user_id']}"
-            )
-
-            del pending_links[link_id]
-            await query.edit_message_text("Одобрено")
-
-    # отклонение
-    elif data_cb.startswith("decline_"):
-        link_id = data_cb.split("_", 1)[1]
-
-        if link_id in pending_links:
-            del pending_links[link_id]
-            await query.edit_message_text("❌ Отклонено")
+    # toggle файлы
+    elif data_cb.startswith("files_"):
+        chat_id = int(data_cb.split("_")[1])
+        g = get_group(chat_id)
+        g["files"] = not g["files"]
+        save_data()
+        await query.answer("Переключено")
 
     # админ панель
-    elif data_cb == "admin" and update.effective_user.id == ADMIN_ID:
-        text = f"👑 Админ панель\nГрупп: {len(data['groups'])}"
-        await query.edit_message_text(text)
+    elif data_cb == "admin":
+        keyboard = [
+            [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
+            [InlineKeyboardButton("ℹ️ Инфо о группе", callback_data="group_info")]
+        ]
+        await query.edit_message_text("Админ панель:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data_cb == "stats":
+        await query.edit_message_text(f"Групп: {len(data['groups'])}")
+
+    elif data_cb == "group_info":
+        user_states[query.from_user.id] = "await_group_id"
+        await query.message.reply_text("Введи ID группы:")
 
 # ---------- MAIN ----------
 def main():
