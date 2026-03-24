@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -7,12 +6,11 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List
 
-from telegram import Update, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ChatPermissions
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -51,6 +49,7 @@ def get_group_settings(chat_id: int):
             "stats": {"messages": 0, "violations": 0}
         }
         save_data()
+        logging.info(f"✅ Зарегистрирована группа {chat_id}")
     return data["groups"][cid]
 
 # ---------- UTILS ----------
@@ -90,9 +89,12 @@ async def restrict_user(chat_id, user_id, duration, reason, context):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=datetime.now() + timedelta(seconds=duration)
         )
-        await context.bot.send_message(chat_id, f"🚫 {user_id} мут на {duration} сек ({reason})")
+        await context.bot.send_message(
+            chat_id,
+            f"🚫 Пользователь {user_id} ограничен на {duration} сек. Причина: {reason}"
+        )
     except Exception as e:
-        logging.error(e)
+        logging.error(f"Ошибка мута: {e}")
 
 # ---------- CORE ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -103,16 +105,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not chat:
         return
 
-    # 🔥 регистрация любой группы
+    logging.info(f"[CHAT] {chat.id} | {chat.type} | {chat.title}")
+
+    # регистрация группы
     if chat.type in ("group", "supergroup"):
         if str(chat.id) not in data["groups"]:
             try:
                 bot_member = await chat.get_member(context.bot.id)
                 if bot_member.status in ("administrator", "member"):
                     get_group_settings(chat.id)
-                    logging.info(f"NEW GROUP: {chat.id}")
-            except:
-                pass
+            except Exception as e:
+                logging.warning(f"Ошибка регистрации: {e}")
 
     if not user or user.is_bot:
         return
@@ -138,7 +141,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_flooding(user.id, chat.id):
         await restrict_user(chat.id, user.id, settings["flood_mute"], "Флуд", context)
         if message:
-            await message.delete()
+            try:
+                await message.delete()
+            except:
+                pass
         return
 
     if message and message.text:
@@ -146,35 +152,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if settings["block_links"] and contains_link(text):
             await restrict_user(chat.id, user.id, 60, "Ссылка", context)
-            await message.delete()
+            try:
+                await message.delete()
+            except:
+                pass
             return
 
         if settings["invite_links_block"] and contains_invite_link(text):
             await restrict_user(chat.id, user.id, 60, "Инвайт", context)
-            await message.delete()
+            try:
+                await message.delete()
+            except:
+                pass
             return
 
         if settings["caps_filter"] and is_caps_abuse(text):
             await restrict_user(chat.id, user.id, 60, "CAPS", context)
-            await message.delete()
+            try:
+                await message.delete()
+            except:
+                pass
             return
 
     if message and settings["block_media"]:
         if any((message.photo, message.video, message.document,
                 message.voice, message.audio, message.animation, message.sticker)):
             await restrict_user(chat.id, user.id, 60, "Медиа", context)
-            await message.delete()
+            try:
+                await message.delete()
+            except:
+                pass
 
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Бот работает. /mygroups")
+    await update.message.reply_text("🤖 Бот работает! Напиши в группе любое сообщение.")
 
 async def my_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not data["groups"]:
         await update.message.reply_text("Нет групп")
         return
 
-    text = "Группы:\n"
+    text = "📋 Группы:\n\n"
     for gid in data["groups"]:
         try:
             chat = await context.bot.get_chat(int(gid))
@@ -191,11 +209,15 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.ALL, handle_message), group=0)
+    # Сначала команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("mygroups", my_groups))
 
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Потом сообщения
+    app.add_handler(MessageHandler(filters.ALL, handle_message))
+
+    print("🚀 Бот запущен")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
