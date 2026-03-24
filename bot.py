@@ -1,305 +1,485 @@
 import asyncio
+import json
 import logging
+import os
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
-from telegram import Update, ChatPermissions
+from telegram import Update, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters,
+)
 
 # ---------- КОНФИГУРАЦИЯ ----------
 TOKEN = "8768850938:AAGXlxCENVXIqUXAJMBG2bl2xgUwNAJOc4Q"
+DATA_FILE = "bot_data.json"
+ADMIN_ID = 2032012311  # Главный админ
 
-# Настройки антифлуда
-FLOOD_LIMIT = 5
-FLOOD_WINDOW = 10
-FLOOD_MUTE_DURATION = 60
+# Настройки по умолчанию для групп
+DEFAULT_SETTINGS = {
+    "tariff": "free",           # free, standard, pro
+    "flood_limit": 5,           # сообщений
+    "flood_window": 10,         # секунд
+    "flood_mute": 60,           # секунд мута
+    "block_links": True,        # блокировать ссылки
+    "block_media": True,        # блокировать медиа
+    "block_bad_words": False,   # блокировать запрещённые слова
+    "custom_welcome": None,     # кастомное приветствие (для standard/pro)
+    "check_links": True,        # отправлять ссылки на проверку (флаг)
+    "check_files": False,       # отправлять файлы на проверку
+    "check_content": False,     # проверка контента (pro)
+    "stats": {
+        "messages": 0,
+        "violations": 0
+    }
+}
 
-# Включение/отключение функций
-BLOCK_LINKS = True
-BLOCK_MEDIA = True
-BLOCK_BAD_WORDS = True
+# Тарифы и их возможности
+TARIFF_FEATURES = {
+    "free": {
+        "block_links": True,
+        "block_media": False,
+        "block_bad_words": False,
+        "custom_welcome": False,
+        "check_links": True,
+        "check_files": False,
+        "check_content": False
+    },
+    "standard": {
+        "block_links": True,
+        "block_media": True,
+        "block_bad_words": False,
+        "custom_welcome": True,
+        "check_links": True,
+        "check_files": True,
+        "check_content": False
+    },
+    "pro": {
+        "block_links": True,
+        "block_media": True,
+        "block_bad_words": True,
+        "custom_welcome": True,
+        "check_links": True,
+        "check_files": True,
+        "check_content": True
+    }
+}
 
-BAD_WORDS_FILE = "bad_words.txt"
-LOG_CHAT_ID = None          # ID чата для логов, если нужен
-
-# ---------- ГЛОБАЛЬНЫЕ СТРУКТУРЫ ----------
-user_messages: Dict[int, List[datetime]] = defaultdict(list)
+# ---------- ГЛОБАЛЬНЫЕ ДАННЫЕ ----------
+data: Dict = {"groups": {}, "admins": [ADMIN_ID]}
+user_messages: Dict[int, List[datetime]] = defaultdict(list)  # для антифлуда
 bad_words: Set[str] = set()
 
-# ---------- ЗАГРУЗКА ЗАПРЕЩЁННЫХ СЛОВ ----------
+# ---------- ЗАГРУЗКА / СОХРАНЕНИЕ ДАННЫХ ----------
+def load_data():
+    global data
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Убедимся, что админ в списке
+            if ADMIN_ID not in data.get("admins", []):
+                data.setdefault("admins", []).append(ADMIN_ID)
+        except Exception as e:
+            logging.error(f"Ошибка загрузки данных: {e}")
+            data = {"groups": {}, "admins": [ADMIN_ID]}
+    else:
+        data = {"groups": {}, "admins": [ADMIN_ID]}
+
+def save_data():
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logging.error(f"Ошибка сохранения данных: {e}")
+
+# Получить настройки группы
+def get_group_settings(chat_id: int) -> Dict:
+    chat_id = str(chat_id)
+    if chat_id not in data["groups"]:
+        # Инициализация настроек по умолчанию
+        settings = DEFAULT_SETTINGS.copy()
+        data["groups"][chat_id] = settings
+        save_data()
+        return settings
+    return data["groups"][chat_id]
+
+# Сохранить настройки группы
+def set_group_settings(chat_id: int, settings: Dict):
+    data["groups"][str(chat_id)] = settings
+    save_data()
+
+# Обновить отдельные параметры
+def update_group_setting(chat_id: int, key: str, value):
+    settings = get_group_settings(chat_id)
+    settings[key] = value
+    set_group_settings(chat_id, settings)
+
+# ---------- ЗАГРУЗКА ЗАПРЕЩЁННЫХ СЛОВ (пока не используется в этом варианте, оставим заглушку) ----------
 def load_bad_words():
-    try:
-        with open(BAD_WORDS_FILE, "r", encoding="utf-8") as f:
-            words = [line.strip().lower() for line in f if line.strip()]
-        bad_words.update(words)
-        logging.info(f"Загружено {len(bad_words)} запрещённых слов.")
-    except FileNotFoundError:
-        logging.warning(f"Файл {BAD_WORDS_FILE} не найден, список запрещённых слов пуст.")
-    except Exception as e:
-        logging.error(f"Ошибка загрузки запрещённых слов: {e}")
+    # Позже добавим
+    pass
 
-def save_bad_words():
-    try:
-        with open(BAD_WORDS_FILE, "w", encoding="utf-8") as f:
-            for word in bad_words:
-                f.write(word + "\n")
-        logging.info("Список запрещённых слов сохранён.")
-    except Exception as e:
-        logging.error(f"Ошибка сохранения списка слов: {e}")
-
-# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
-def contains_bad_words(text: str) -> bool:
-    if not text:
-        return False
-    text_lower = text.lower()
-    for word in bad_words:
-        if word in text_lower:
-            return True
-    return False
-
+# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ПРОВЕРОК ----------
 def contains_link(text: str) -> bool:
     url_pattern = re.compile(r'(https?://|www\.)\S+', re.IGNORECASE)
     return bool(url_pattern.search(text))
 
-def is_flooding(user_id: int) -> bool:
+def is_flooding(user_id: int, chat_id: int) -> bool:
+    settings = get_group_settings(chat_id)
+    limit = settings["flood_limit"]
+    window = settings["flood_window"]
     now = datetime.now()
     timestamps = user_messages[user_id]
-    cutoff = now - timedelta(seconds=FLOOD_WINDOW)
+    cutoff = now - timedelta(seconds=window)
     timestamps = [ts for ts in timestamps if ts > cutoff]
     user_messages[user_id] = timestamps
     timestamps.append(now)
-    return len(timestamps) > FLOOD_LIMIT
+    return len(timestamps) > limit
 
-# ---------- ФУНКЦИИ ОГРАНИЧЕНИЙ ----------
-async def restrict_user(update: Update, user_id: int, duration_seconds: int, reason: str):
+async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.effective_chat.restrict_member(
+        await context.bot.restrict_chat_member(
+            chat_id,
             user_id,
             permissions=ChatPermissions(can_send_messages=False),
-            until_date=datetime.now() + timedelta(seconds=duration_seconds)
+            until_date=datetime.now() + timedelta(seconds=duration)
         )
-        await update.message.reply_text(
-            f"🚫 Пользователь {update.effective_user.mention_html()} получил ограничение на {duration_seconds} секунд.\nПричина: {reason}",
-            parse_mode=ParseMode.HTML
+        # Уведомление в чате
+        await context.bot.send_message(
+            chat_id,
+            f"🚫 Пользователь {user_id} получил ограничение на {duration} сек.\nПричина: {reason}"
         )
-        if LOG_CHAT_ID:
-            await update.get_bot().send_message(
-                LOG_CHAT_ID,
-                f"🚫 Заблокирован {update.effective_user.mention_html()} в {update.effective_chat.title}.\nПричина: {reason}",
-                parse_mode=ParseMode.HTML
-            )
+        # Увеличить статистику нарушений
+        settings = get_group_settings(chat_id)
+        settings["stats"]["violations"] += 1
+        set_group_settings(chat_id, settings)
     except Exception as e:
-        logging.error(f"Не удалось ограничить пользователя {user_id}: {e}")
+        logging.error(f"Не удалось ограничить пользователя {user_id} в чате {chat_id}: {e}")
 
-async def kick_user(update: Update, user_id: int, reason: str):
-    try:
-        await update.effective_chat.ban_member(user_id)
-        await update.effective_chat.unban_member(user_id)
-        await update.message.reply_text(
-            f"👢 Пользователь {update.effective_user.mention_html()} был удалён из чата.\nПричина: {reason}",
-            parse_mode=ParseMode.HTML
-        )
-        if LOG_CHAT_ID:
-            await update.get_bot().send_message(
-                LOG_CHAT_ID,
-                f"👢 Кикнут {update.effective_user.mention_html()} из {update.effective_chat.title}.\nПричина: {reason}",
-                parse_mode=ParseMode.HTML
-            )
-    except Exception as e:
-        logging.error(f"Не удалось кикнуть пользователя {user_id}: {e}")
-
-# ---------- ОБРАБОТЧИК СООБЩЕНИЙ ----------
+# ---------- ОБРАБОТЧИК СООБЩЕНИЙ (ЗАЩИТА) ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Главная проверка сообщений (антифлуд, запрещённые слова, ссылки, медиа)."""
     if not update.effective_chat or not update.effective_user:
         return
-
     chat = update.effective_chat
     user = update.effective_user
     message = update.effective_message
 
-    # Игнорируем сообщения от ботов
+    # Игнорируем ботов
     if user.is_bot:
         return
+
+    # Получаем настройки для этого чата
+    settings = get_group_settings(chat.id)
+    tariff = settings["tariff"]
+
+    # Увеличиваем счётчик сообщений
+    settings["stats"]["messages"] += 1
+    set_group_settings(chat.id, settings)
 
     # Проверка прав бота
     try:
         bot_member = await chat.get_member(context.bot.id)
         if not bot_member.can_restrict_members:
-            await message.reply_text("❌ У бота нет прав на удаление сообщений и ограничение пользователей. Назначьте его администратором с правами на блокировку.")
+            await message.reply_text("❌ У бота нет прав на ограничение пользователей.")
             return
-    except Exception:
+    except:
         return
 
-    # Антифлуд
-    if is_flooding(user.id):
-        await restrict_user(update, user.id, FLOOD_MUTE_DURATION, "Флуд")
+    # 1. Антифлуд
+    if is_flooding(user.id, chat.id):
+        mute_duration = settings.get("flood_mute", 60)
+        await restrict_user(chat.id, user.id, mute_duration, "Флуд", context)
         try:
             await message.delete()
         except:
             pass
         return
 
-    # Запрещённые слова
-    if BLOCK_BAD_WORDS and message.text and contains_bad_words(message.text):
-        await restrict_user(update, user.id, FLOOD_MUTE_DURATION, "Запрещённое слово")
+    # 2. Блокировка ссылок (если включена)
+    if settings.get("block_links", True) and message.text and contains_link(message.text):
+        await restrict_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
         try:
             await message.delete()
         except:
             pass
         return
 
-    # Ссылки
-    if BLOCK_LINKS and message.text and contains_link(message.text):
-        await restrict_user(update, user.id, FLOOD_MUTE_DURATION, "Запрещённые ссылки")
-        try:
-            await message.delete()
-        except:
-            pass
-        return
-
-    # Медиа
-    if BLOCK_MEDIA:
-        if (message.photo or message.video or message.document or message.voice or
-            message.audio or message.animation or message.sticker):
-            await restrict_user(update, user.id, FLOOD_MUTE_DURATION, "Медиафайлы запрещены")
+    # 3. Блокировка медиа (если включена)
+    if settings.get("block_media", True):
+        media_types = (message.photo, message.video, message.document, message.voice, message.audio, message.animation, message.sticker)
+        if any(media_types):
+            await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
             try:
                 await message.delete()
             except:
                 pass
             return
 
-# ---------- ОБРАБОТЧИК НОВЫХ УЧАСТНИКОВ ----------
+    # 4. Блокировка запрещённых слов (если включена)
+    if settings.get("block_bad_words", False) and message.text and contains_bad_words(message.text):
+        await restrict_user(chat.id, user.id, 60, "Запрещённое слово", context)
+        try:
+            await message.delete()
+        except:
+            pass
+        return
+
+    # 5. Отправка на проверку ссылок/файлов (заглушка)
+    if settings.get("check_links", False) and message.text and contains_link(message.text):
+        # TODO: отправить ссылку на проверку модератору
+        pass
+
+    if settings.get("check_files", False) and message.document:
+        # TODO: отправить файл на проверку
+        pass
+
+    if settings.get("check_content", False):
+        # TODO: расширенная проверка контента
+        pass
+
+def contains_bad_words(text: str) -> bool:
+    # Временно заглушка
+    return False
+
+# ---------- НОВЫЕ УЧАСТНИКИ (ПРИВЕТСТВИЕ) ----------
 async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
     for member in update.message.new_chat_members:
         if member.id == context.bot.id:
+            # Бот добавлен, инициализируем настройки
+            get_group_settings(chat.id)  # создаст запись, если нет
             await update.message.reply_text(
                 "🤖 *Бот-защитник активирован!*\n\n"
-                "Я буду следить за порядком: блокировать флуд, запрещённые слова, ссылки и медиа.\n\n"
-                "Команды:\n"
-                "/settings – показать текущие настройки\n"
-                "/addword <слово> – добавить слово в чёрный список\n"
-                "/delword <слово> – удалить слово из чёрного списка\n"
-                "/setflood <лимит> <окно> – настроить антифлуд\n"
-                "/mute [секунды] – замутить пользователя (ответом на сообщение)\n"
-                "/kick – кикнуть пользователя (ответом на сообщение)",
+                "Для настройки напишите мне в личные сообщения /menu и выберите эту группу.\n"
+                "По умолчанию активен бесплатный тариф.",
                 parse_mode=ParseMode.MARKDOWN
             )
         else:
-            await update.message.reply_text(f"Добро пожаловать, {member.full_name}! Пожалуйста, соблюдайте правила чата.")
+            # Приветствие нового участника (если включено)
+            settings = get_group_settings(chat.id)
+            if settings.get("custom_welcome"):
+                welcome_text = settings["custom_welcome"] or f"Добро пожаловать, {member.full_name}!"
+                await update.message.reply_text(welcome_text)
+            else:
+                await update.message.reply_text(f"Добро пожаловать, {member.full_name}!")
 
-# ---------- КОМАНДЫ ----------
+# ---------- КОМАНДЫ В ЛИЧНЫХ СООБЩЕНИЯХ ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Приветственное сообщение в личных сообщениях или группе."""
+    """Приветствие и главное меню."""
     await update.message.reply_text(
         "👋 Привет! Я бот-защитник чатов.\n"
-        "Добавьте меня в группу и назначьте администратором с правами на блокировку пользователей.\n\n"
-        "В группе используйте /help для списка команд."
+        "Добавьте меня в группу и назначьте администратором.\n\n"
+        "Используйте /menu для управления моими группами и настройками."
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список доступных команд."""
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список групп, где бот добавлен, и меню управления."""
+    user_id = update.effective_user.id
+    # Получаем все группы, где бот есть (из данных)
+    groups = data["groups"]
+    if not groups:
+        await update.message.reply_text("Вы ещё не добавили меня ни в одну группу.\nДобавьте бота в группу и назначьте администратором.")
+        return
+
+    # Создаём кнопки для каждой группы
+    keyboard = []
+    for chat_id_str, settings in groups.items():
+        try:
+            chat = await context.bot.get_chat(int(chat_id_str))
+            title = chat.title or f"Группа {chat_id_str}"
+        except:
+            title = f"Группа {chat_id_str}"
+        keyboard.append([InlineKeyboardButton(title, callback_data=f"group_{chat_id_str}")])
+    keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
+    await update.message.reply_text(
+        "Выберите группу для настройки:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий на кнопки."""
+    query = update.callback_query
+    await query.answer()
+    data_cb = query.data
+
+    if data_cb == "close":
+        await query.edit_message_text("Меню закрыто.")
+        return
+
+    if data_cb.startswith("group_"):
+        chat_id = data_cb.split("_")[1]
+        context.user_data["current_group"] = chat_id
+        await show_group_menu(query, chat_id)
+        return
+
+    # Обработка других действий (настройки, выбор тарифа и т.д.)
+    if data_cb.startswith("tariff_"):
+        tariff = data_cb.split("_")[1]
+        chat_id = context.user_data.get("current_group")
+        if chat_id:
+            # Обновить тариф и применить настройки из TARIFF_FEATURES
+            new_settings = get_group_settings(int(chat_id))
+            new_settings["tariff"] = tariff
+            # Применяем настройки по умолчанию для тарифа
+            for key, value in TARIFF_FEATURES[tariff].items():
+                new_settings[key] = value
+            set_group_settings(int(chat_id), new_settings)
+            await query.edit_message_text(f"✅ Тариф изменён на {tariff.upper()}")
+            await asyncio.sleep(2)
+            await show_group_menu(query, chat_id)
+        return
+
+    if data_cb.startswith("setflood_"):
+        # Запрос на ввод лимита и окна
+        chat_id = context.user_data.get("current_group")
+        if chat_id:
+            context.user_data["flood_setting"] = chat_id
+            await query.edit_message_text(
+                "Введите лимит сообщений и окно в секундах через пробел.\nПример: `5 10`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return ConversationHandler.END  # мы не используем ConversationHandler, просто сохраняем состояние
+    # Добавим простую реализацию через ожидание следующего сообщения (используем следующий обработчик)
+
+async def show_group_menu(query, chat_id):
+    """Отображает меню настройки группы."""
+    settings = get_group_settings(int(chat_id))
+    tariff = settings["tariff"]
     text = (
-        "📋 *Доступные команды:*\n\n"
-        "/start – приветствие\n"
-        "/help – эта справка\n"
-        "/settings – текущие настройки\n"
-        "/addword <слово> – добавить слово в чёрный список\n"
-        "/delword <слово> – удалить слово из чёрного списка\n"
-        "/setflood <лимит> <окно> – настроить антифлуд\n"
-        "/mute [секунды] – замутить пользователя (ответом)\n"
-        "/kick – кикнуть пользователя (ответом)\n\n"
-        "⚠️ Команды настройки доступны только администраторам группы."
+        f"*Группа:* {chat_id}\n"
+        f"*Тариф:* {tariff.upper()}\n"
+        f"*Антиспам:* {settings['flood_limit']} сообщ. за {settings['flood_window']} сек → мут {settings['flood_mute']} сек\n"
+        f"*Блокировка ссылок:* {'✅' if settings['block_links'] else '❌'}\n"
+        f"*Блокировка медиа:* {'✅' if settings['block_media'] else '❌'}\n"
+        f"*Кастомное приветствие:* {'✅' if settings['custom_welcome'] else '❌'}\n"
+        f"*Проверка ссылок:* {'✅' if settings['check_links'] else '❌'}\n"
+        f"*Проверка файлов:* {'✅' if settings['check_files'] else '❌'}\n"
+        f"*Проверка контента:* {'✅' if settings['check_content'] else '❌'}\n"
+        f"*Статистика:* сообщений {settings['stats']['messages']}, нарушений {settings['stats']['violations']}"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    keyboard = [
+        [InlineKeyboardButton("Сменить тариф", callback_data="choose_tariff")],
+        [InlineKeyboardButton("Настроить антиспам", callback_data="configure_flood")],
+        [InlineKeyboardButton("Вкл/Выкл ссылки", callback_data="toggle_links")],
+        [InlineKeyboardButton("Вкл/Выкл медиа", callback_data="toggle_media")],
+        [InlineKeyboardButton("Кастомное приветствие", callback_data="set_welcome")],
+        [InlineKeyboardButton("Назад", callback_data="back_to_groups")],
+    ]
+    # Добавляем кнопки для выбора тарифа, если нажата choose_tariff
+    if query.data == "choose_tariff":
+        tariff_buttons = [
+            [InlineKeyboardButton("Бесплатный", callback_data="tariff_free")],
+            [InlineKeyboardButton("Стандартный", callback_data="tariff_standard")],
+            [InlineKeyboardButton("Профессиональный", callback_data="tariff_pro")],
+            [InlineKeyboardButton("Назад", callback_data="group_" + chat_id)]
+        ]
+        await query.edit_message_text("Выберите тариф:", reply_markup=InlineKeyboardMarkup(tariff_buttons))
+        return
 
-async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать текущие настройки."""
-    text = (
-        "⚙️ *Текущие настройки бота:*\n"
-        f"• Антифлуд: {FLOOD_LIMIT} сообщений за {FLOOD_WINDOW} сек → мут {FLOOD_MUTE_DURATION} сек\n"
-        f"• Блокировка ссылок: {'✅' if BLOCK_LINKS else '❌'}\n"
-        f"• Блокировка медиа: {'✅' if BLOCK_MEDIA else '❌'}\n"
-        f"• Блокировка слов: {'✅' if BLOCK_BAD_WORDS else '❌'} (загружено {len(bad_words)} слов)"
-    )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def add_word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update, context):
+# ---------- АДМИН-ПАНЕЛЬ ----------
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in data.get("admins", []):
+        await update.message.reply_text("⛔ У вас нет доступа к админ-панели.")
+        return
+
+    # Показать меню админа
+    text = "🔧 *Админ-панель*\n\n"
+    text += f"Всего групп: {len(data['groups'])}\n"
+    text += f"Администраторов бота: {len(data['admins'])}"
+    keyboard = [
+        [InlineKeyboardButton("Список групп", callback_data="admin_groups")],
+        [InlineKeyboardButton("Управление админами", callback_data="admin_admins")],
+        [InlineKeyboardButton("Статистика", callback_data="admin_stats")],
+    ]
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    if user_id not in data.get("admins", []):
+        await query.edit_message_text("⛔ Доступ запрещён.")
+        return
+
+    if query.data == "admin_groups":
+        # Список всех групп
+        groups = data["groups"]
+        if not groups:
+            await query.edit_message_text("Нет групп.")
+            return
+        text = "*Список групп:*\n"
+        for chat_id_str, s in groups.items():
+            try:
+                chat = await context.bot.get_chat(int(chat_id_str))
+                title = chat.title or "Без названия"
+            except:
+                title = "Недоступно"
+            text += f"{title} (ID: {chat_id_str}) – тариф {s['tariff']}\n"
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+    elif query.data == "admin_admins":
+        # Управление админами: показать список и кнопку добавить
+        admins = data["admins"]
+        text = "*Администраторы бота:*\n"
+        for aid in admins:
+            text += f"- {aid}\n"
+        text += "\nДля добавления введите /addadmin <id>\nДля удаления /deladmin <id>"
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+    elif query.data == "admin_stats":
+        total_messages = sum(s["stats"]["messages"] for s in data["groups"].values())
+        total_violations = sum(s["stats"]["violations"] for s in data["groups"].values())
+        text = f"*Общая статистика*\nСообщений: {total_messages}\nНарушений: {total_violations}"
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+
+async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("⛔ Только главный админ может добавлять администраторов.")
         return
     if not context.args:
-        await update.message.reply_text("Укажите слово: /addword слово")
-        return
-    word = context.args[0].lower()
-    bad_words.add(word)
-    save_bad_words()
-    await update.message.reply_text(f"✅ Слово '{word}' добавлено в чёрный список.")
-
-async def del_word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update, context):
-        return
-    if not context.args:
-        await update.message.reply_text("Укажите слово: /delword слово")
-        return
-    word = context.args[0].lower()
-    if word in bad_words:
-        bad_words.remove(word)
-        save_bad_words()
-        await update.message.reply_text(f"✅ Слово '{word}' удалено из чёрного списка.")
-    else:
-        await update.message.reply_text(f"❌ Слово '{word}' не найдено в чёрном списке.")
-
-async def set_flood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update, context):
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Использование: /setflood <лимит> <окно_сек>")
+        await update.message.reply_text("Использование: /addadmin <user_id>")
         return
     try:
-        limit = int(context.args[0])
-        window = int(context.args[1])
-        global FLOOD_LIMIT, FLOOD_WINDOW
-        FLOOD_LIMIT = limit
-        FLOOD_WINDOW = window
-        await update.message.reply_text(f"✅ Антифлуд настроен: {limit} сообщений за {window} секунд.")
-    except ValueError:
-        await update.message.reply_text("Ошибка: лимит и окно должны быть числами.")
-
-async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update, context):
-        return
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Ответьте на сообщение пользователя командой /mute [секунды]")
-        return
-    user_id = update.message.reply_to_message.from_user.id
-    duration = int(context.args[0]) if context.args and context.args[0].isdigit() else 60
-    await restrict_user(update, user_id, duration, "Мут по команде администратора")
-
-async def kick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update, context):
-        return
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Ответьте на сообщение пользователя командой /kick")
-        return
-    user_id = update.message.reply_to_message.from_user.id
-    await kick_user(update, user_id, "Кик по команде администратора")
-
-async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Проверяет, является ли пользователь администратором чата."""
-    user = update.effective_user
-    try:
-        member = await update.effective_chat.get_member(user.id)
-        if member.status in ("administrator", "creator"):
-            return True
+        new_admin = int(context.args[0])
+        if new_admin not in data["admins"]:
+            data["admins"].append(new_admin)
+            save_data()
+            await update.message.reply_text(f"✅ Пользователь {new_admin} добавлен как администратор.")
         else:
-            await update.message.reply_text("⛔ Эта команда доступна только администраторам.")
-            return False
-    except Exception as e:
-        logging.error(f"Ошибка проверки прав администратора: {e}")
-        return False
+            await update.message.reply_text("Уже администратор.")
+    except:
+        await update.message.reply_text("Ошибка: ID должен быть числом.")
+
+async def del_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("⛔ Только главный админ может удалять администраторов.")
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /deladmin <user_id>")
+        return
+    try:
+        admin_to_del = int(context.args[0])
+        if admin_to_del in data["admins"] and admin_to_del != ADMIN_ID:
+            data["admins"].remove(admin_to_del)
+            save_data()
+            await update.message.reply_text(f"✅ Пользователь {admin_to_del} удалён из администраторов.")
+        else:
+            await update.message.reply_text("Нельзя удалить главного админа или пользователь не администратор.")
+    except:
+        await update.message.reply_text("Ошибка.")
 
 # ---------- ЗАПУСК БОТА ----------
 def main():
@@ -307,6 +487,7 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=logging.INFO
     )
+    load_data()
     load_bad_words()
 
     application = Application.builder().token(TOKEN).build()
@@ -318,13 +499,14 @@ def main():
 
     # Команды
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("settings", settings_command))
-    application.add_handler(CommandHandler("addword", add_word_command))
-    application.add_handler(CommandHandler("delword", del_word_command))
-    application.add_handler(CommandHandler("setflood", set_flood_command))
-    application.add_handler(CommandHandler("mute", mute_command))
-    application.add_handler(CommandHandler("kick", kick_command))
+    application.add_handler(CommandHandler("menu", menu))
+    application.add_handler(CommandHandler("admin", admin_panel))
+    application.add_handler(CommandHandler("addadmin", add_admin))
+    application.add_handler(CommandHandler("deladmin", del_admin))
+
+    # Обработчики кнопок
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|tariff_|choose_tariff|configure_flood|toggle_links|toggle_media|set_welcome|back_to_groups|close)"))
+    application.add_handler(CallbackQueryHandler(admin_callback, pattern="^(admin_groups|admin_admins|admin_stats)"))
 
     application.run_polling()
 
