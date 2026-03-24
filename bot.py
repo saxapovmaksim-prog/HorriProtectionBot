@@ -5,7 +5,7 @@ import os
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Set, Optional
 
 from telegram import Update, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -14,7 +14,6 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
-    ConversationHandler,
     ContextTypes,
     filters,
 )
@@ -79,6 +78,9 @@ data: Dict = {"groups": {}, "admins": [ADMIN_ID]}
 user_messages: Dict[int, List[datetime]] = defaultdict(list)  # для антифлуда
 bad_words: Set[str] = set()
 
+# Для временного хранения состояния настройки антиспама
+flood_setting_users: Dict[int, Dict] = {}  # {user_id: {"chat_id": int, "step": str}}
+
 # ---------- ЗАГРУЗКА / СОХРАНЕНИЕ ДАННЫХ ----------
 def load_data():
     global data
@@ -86,7 +88,6 @@ def load_data():
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # Убедимся, что админ в списке
             if ADMIN_ID not in data.get("admins", []):
                 data.setdefault("admins", []).append(ADMIN_ID)
         except Exception as e:
@@ -102,32 +103,23 @@ def save_data():
     except Exception as e:
         logging.error(f"Ошибка сохранения данных: {e}")
 
-# Получить настройки группы
 def get_group_settings(chat_id: int) -> Dict:
-    chat_id = str(chat_id)
-    if chat_id not in data["groups"]:
-        # Инициализация настроек по умолчанию
+    chat_id_str = str(chat_id)
+    if chat_id_str not in data["groups"]:
         settings = DEFAULT_SETTINGS.copy()
-        data["groups"][chat_id] = settings
+        data["groups"][chat_id_str] = settings
         save_data()
         return settings
-    return data["groups"][chat_id]
+    return data["groups"][chat_id_str]
 
-# Сохранить настройки группы
 def set_group_settings(chat_id: int, settings: Dict):
     data["groups"][str(chat_id)] = settings
     save_data()
 
-# Обновить отдельные параметры
 def update_group_setting(chat_id: int, key: str, value):
     settings = get_group_settings(chat_id)
     settings[key] = value
     set_group_settings(chat_id, settings)
-
-# ---------- ЗАГРУЗКА ЗАПРЕЩЁННЫХ СЛОВ (пока не используется в этом варианте, оставим заглушку) ----------
-def load_bad_words():
-    # Позже добавим
-    pass
 
 # ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ПРОВЕРОК ----------
 def contains_link(text: str) -> bool:
@@ -154,12 +146,10 @@ async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, 
             permissions=ChatPermissions(can_send_messages=False),
             until_date=datetime.now() + timedelta(seconds=duration)
         )
-        # Уведомление в чате
         await context.bot.send_message(
             chat_id,
             f"🚫 Пользователь {user_id} получил ограничение на {duration} сек.\nПричина: {reason}"
         )
-        # Увеличить статистику нарушений
         settings = get_group_settings(chat_id)
         settings["stats"]["violations"] += 1
         set_group_settings(chat_id, settings)
@@ -174,19 +164,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.effective_message
 
-    # Игнорируем ботов
     if user.is_bot:
         return
 
-    # Получаем настройки для этого чата
     settings = get_group_settings(chat.id)
     tariff = settings["tariff"]
 
-    # Увеличиваем счётчик сообщений
+    # Обновляем статистику сообщений
     settings["stats"]["messages"] += 1
     set_group_settings(chat.id, settings)
 
-    # Проверка прав бота
     try:
         bot_member = await chat.get_member(context.bot.id)
         if not bot_member.can_restrict_members:
@@ -195,7 +182,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         return
 
-    # 1. Антифлуд
+    # Антифлуд
     if is_flooding(user.id, chat.id):
         mute_duration = settings.get("flood_mute", 60)
         await restrict_user(chat.id, user.id, mute_duration, "Флуд", context)
@@ -205,7 +192,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # 2. Блокировка ссылок (если включена)
+    # Блокировка ссылок
     if settings.get("block_links", True) and message.text and contains_link(message.text):
         await restrict_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
         try:
@@ -214,10 +201,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # 3. Блокировка медиа (если включена)
+    # Блокировка медиа
     if settings.get("block_media", True):
-        media_types = (message.photo, message.video, message.document, message.voice, message.audio, message.animation, message.sticker)
-        if any(media_types):
+        if any((message.photo, message.video, message.document, message.voice,
+                message.audio, message.animation, message.sticker)):
             await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
             try:
                 await message.delete()
@@ -225,39 +212,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-    # 4. Блокировка запрещённых слов (если включена)
-    if settings.get("block_bad_words", False) and message.text and contains_bad_words(message.text):
-        await restrict_user(chat.id, user.id, 60, "Запрещённое слово", context)
-        try:
-            await message.delete()
-        except:
-            pass
-        return
+    # Блокировка запрещённых слов (заглушка)
+    if settings.get("block_bad_words", False) and message.text:
+        # TODO: реализовать проверку слов
+        pass
 
-    # 5. Отправка на проверку ссылок/файлов (заглушка)
+    # Проверка ссылок/файлов (заглушки)
     if settings.get("check_links", False) and message.text and contains_link(message.text):
-        # TODO: отправить ссылку на проверку модератору
+        # Отправить модератору
         pass
-
     if settings.get("check_files", False) and message.document:
-        # TODO: отправить файл на проверку
         pass
-
     if settings.get("check_content", False):
-        # TODO: расширенная проверка контента
         pass
 
-def contains_bad_words(text: str) -> bool:
-    # Временно заглушка
-    return False
-
-# ---------- НОВЫЕ УЧАСТНИКИ (ПРИВЕТСТВИЕ) ----------
+# ---------- НОВЫЕ УЧАСТНИКИ ----------
 async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     for member in update.message.new_chat_members:
         if member.id == context.bot.id:
-            # Бот добавлен, инициализируем настройки
-            get_group_settings(chat.id)  # создаст запись, если нет
+            get_group_settings(chat.id)  # инициализация
             await update.message.reply_text(
                 "🤖 *Бот-защитник активирован!*\n\n"
                 "Для настройки напишите мне в личные сообщения /menu и выберите эту группу.\n"
@@ -265,17 +239,15 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
                 parse_mode=ParseMode.MARKDOWN
             )
         else:
-            # Приветствие нового участника (если включено)
             settings = get_group_settings(chat.id)
             if settings.get("custom_welcome"):
-                welcome_text = settings["custom_welcome"] or f"Добро пожаловать, {member.full_name}!"
-                await update.message.reply_text(welcome_text)
+                welcome = settings["custom_welcome"] or f"Добро пожаловать, {member.full_name}!"
+                await update.message.reply_text(welcome)
             else:
                 await update.message.reply_text(f"Добро пожаловать, {member.full_name}!")
 
 # ---------- КОМАНДЫ В ЛИЧНЫХ СООБЩЕНИЯХ ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Приветствие и главное меню."""
     await update.message.reply_text(
         "👋 Привет! Я бот-защитник чатов.\n"
         "Добавьте меня в группу и назначьте администратором.\n\n"
@@ -283,15 +255,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает список групп, где бот добавлен, и меню управления."""
     user_id = update.effective_user.id
-    # Получаем все группы, где бот есть (из данных)
     groups = data["groups"]
     if not groups:
         await update.message.reply_text("Вы ещё не добавили меня ни в одну группу.\nДобавьте бота в группу и назначьте администратором.")
         return
 
-    # Создаём кнопки для каждой группы
     keyboard = []
     for chat_id_str, settings in groups.items():
         try:
@@ -306,54 +275,185 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+async def show_group_menu(query, chat_id_int: int):
+    """Отображает меню настройки конкретной группы."""
+    settings = get_group_settings(chat_id_int)
+    tariff = settings["tariff"]
+    text = (
+        f"*Группа:* {chat_id_int}\n"
+        f"*Тариф:* {tariff.upper()}\n"
+        f"*Антиспам:* {settings['flood_limit']} сообщ. за {settings['flood_window']} сек → мут {settings['flood_mute']} сек\n"
+        f"*Блокировка ссылок:* {'✅' if settings['block_links'] else '❌'}\n"
+        f"*Блокировка медиа:* {'✅' if settings['block_media'] else '❌'}\n"
+        f"*Кастомное приветствие:* {'✅' if settings['custom_welcome'] else '❌'}\n"
+        f"*Проверка ссылок:* {'✅' if settings['check_links'] else '❌'}\n"
+        f"*Проверка файлов:* {'✅' if settings['check_files'] else '❌'}\n"
+        f"*Проверка контента:* {'✅' if settings['check_content'] else '❌'}\n"
+        f"*Статистика:* сообщений {settings['stats']['messages']}, нарушений {settings['stats']['violations']}"
+    )
+    keyboard = [
+        [InlineKeyboardButton("Сменить тариф", callback_data=f"choose_tariff_{chat_id_int}")],
+        [InlineKeyboardButton("Настроить антиспам", callback_data=f"configure_flood_{chat_id_int}")],
+        [InlineKeyboardButton("Вкл/Выкл ссылки", callback_data=f"toggle_links_{chat_id_int}")],
+        [InlineKeyboardButton("Вкл/Выкл медиа", callback_data=f"toggle_media_{chat_id_int}")],
+        [InlineKeyboardButton("Кастомное приветствие", callback_data=f"set_welcome_{chat_id_int}")],
+        [InlineKeyboardButton("Назад", callback_data="back_to_groups")],
+    ]
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатий на кнопки."""
+    """Обработчик всех инлайн-кнопок (не админских)."""
     query = update.callback_query
     await query.answer()
     data_cb = query.data
+    user_id = update.effective_user.id
 
+    # Закрыть меню
     if data_cb == "close":
         await query.edit_message_text("Меню закрыто.")
         return
 
+    # Назад к списку групп
+    if data_cb == "back_to_groups":
+        groups = data["groups"]
+        if not groups:
+            await query.edit_message_text("Нет доступных групп.")
+            return
+        keyboard = []
+        for chat_id_str, settings in groups.items():
+            try:
+                chat = await context.bot.get_chat(int(chat_id_str))
+                title = chat.title or f"Группа {chat_id_str}"
+            except:
+                title = f"Группа {chat_id_str}"
+            keyboard.append([InlineKeyboardButton(title, callback_data=f"group_{chat_id_str}")])
+        keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
+        await query.edit_message_text("Выберите группу:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    # Выбор группы
     if data_cb.startswith("group_"):
-        chat_id = data_cb.split("_")[1]
-        context.user_data["current_group"] = chat_id
+        chat_id_str = data_cb.split("_")[1]
+        context.user_data["current_group"] = chat_id_str
+        await show_group_menu(query, int(chat_id_str))
+        return
+
+    # Смена тарифа
+    if data_cb.startswith("choose_tariff_"):
+        chat_id = int(data_cb.split("_")[2])
+        tariff_buttons = [
+            [InlineKeyboardButton("Бесплатный", callback_data=f"tariff_free_{chat_id}")],
+            [InlineKeyboardButton("Стандартный", callback_data=f"tariff_standard_{chat_id}")],
+            [InlineKeyboardButton("Профессиональный", callback_data=f"tariff_pro_{chat_id}")],
+            [InlineKeyboardButton("Назад", callback_data=f"group_{chat_id}")],
+        ]
+        await query.edit_message_text("Выберите тариф:", reply_markup=InlineKeyboardMarkup(tariff_buttons))
+        return
+
+    if data_cb.startswith("tariff_"):
+        parts = data_cb.split("_")
+        tariff = parts[1]
+        chat_id = int(parts[2])
+        # Применяем тариф и его настройки
+        new_settings = get_group_settings(chat_id)
+        new_settings["tariff"] = tariff
+        for key, value in TARIFF_FEATURES[tariff].items():
+            new_settings[key] = value
+        set_group_settings(chat_id, new_settings)
+        await query.edit_message_text(f"✅ Тариф изменён на {tariff.upper()}")
+        await asyncio.sleep(1)
         await show_group_menu(query, chat_id)
         return
 
-    # Обработка других действий (настройки, выбор тарифа и т.д.)
-    if data_cb.startswith("tariff_"):
-        tariff = data_cb.split("_")[1]
-        chat_id = context.user_data.get("current_group")
-        if chat_id:
-            # Обновить тариф и применить настройки из TARIFF_FEATURES
-            new_settings = get_group_settings(int(chat_id))
-            new_settings["tariff"] = tariff
-            # Применяем настройки по умолчанию для тарифа
-            for key, value in TARIFF_FEATURES[tariff].items():
-                new_settings[key] = value
-            set_group_settings(int(chat_id), new_settings)
-            await query.edit_message_text(f"✅ Тариф изменён на {tariff.upper()}")
-            await asyncio.sleep(2)
-            await show_group_menu(query, chat_id)
+    # Переключение блокировки ссылок
+    if data_cb.startswith("toggle_links_"):
+        chat_id = int(data_cb.split("_")[2])
+        settings = get_group_settings(chat_id)
+        new_val = not settings["block_links"]
+        update_group_setting(chat_id, "block_links", new_val)
+        await show_group_menu(query, chat_id)
         return
 
-    if data_cb.startswith("setflood_"):
-        # Запрос на ввод лимита и окна
-        chat_id = context.user_data.get("current_group")
-        if chat_id:
-            context.user_data["flood_setting"] = chat_id
-            await query.edit_message_text(
-                "Введите лимит сообщений и окно в секундах через пробел.\nПример: `5 10`",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return ConversationHandler.END  # мы не используем ConversationHandler, просто сохраняем состояние
-    # Добавим простую реализацию через ожидание следующего сообщения (используем следующий обработчик)
+    # Переключение блокировки медиа
+    if data_cb.startswith("toggle_media_"):
+        chat_id = int(data_cb.split("_")[2])
+        settings = get_group_settings(chat_id)
+        new_val = not settings["block_media"]
+        update_group_setting(chat_id, "block_media", new_val)
+        await show_group_menu(query, chat_id)
+        return
 
-async def show_group_menu(query, chat_id):
-    """Отображает меню настройки группы."""
-    settings = get_group_settings(int(chat_id))
+    # Кастомное приветствие
+    if data_cb.startswith("set_welcome_"):
+        chat_id = int(data_cb.split("_")[2])
+        context.user_data["welcome_chat"] = chat_id
+        await query.edit_message_text("Введите текст приветствия (или отправьте пустое сообщение для отключения):")
+        # Переходим в режим ожидания ввода текста
+        return
+
+    # Настройка антиспама
+    if data_cb.startswith("configure_flood_"):
+        chat_id = int(data_cb.split("_")[2])
+        context.user_data["flood_chat"] = chat_id
+        await query.edit_message_text(
+            "Введите параметры антиспама в формате:\n"
+            "`лимит сообщений окно_секунд длительность_мута_секунд`\n"
+            "Пример: `5 10 60`\n\n"
+            "Или отправьте пустое сообщение для отмены.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    # Ввод параметров антиспама обрабатывается в handle_text
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик текстовых сообщений (не команд) для диалогов."""
+    user_id = update.effective_user.id
+    message = update.message
+
+    # Если ожидаем ввод приветствия
+    if "welcome_chat" in context.user_data:
+        chat_id = context.user_data.pop("welcome_chat")
+        text = message.text.strip()
+        if text:
+            update_group_setting(chat_id, "custom_welcome", text)
+            await message.reply_text("✅ Кастомное приветствие сохранено.")
+        else:
+            update_group_setting(chat_id, "custom_welcome", None)
+            await message.reply_text("✅ Кастомное приветствие отключено.")
+        # Показываем меню для этой группы
+        await show_group_menu_from_user(update, chat_id, context)
+        return
+
+    # Если ожидаем ввод параметров антиспама
+    if "flood_chat" in context.user_data:
+        chat_id = context.user_data.pop("flood_chat")
+        text = message.text.strip()
+        if not text:
+            await message.reply_text("Настройка отменена.")
+            return
+        try:
+            parts = text.split()
+            if len(parts) != 3:
+                raise ValueError
+            limit = int(parts[0])
+            window = int(parts[1])
+            mute = int(parts[2])
+            if limit <= 0 or window <= 0 or mute <= 0:
+                raise ValueError
+            update_group_setting(chat_id, "flood_limit", limit)
+            update_group_setting(chat_id, "flood_window", window)
+            update_group_setting(chat_id, "flood_mute", mute)
+            await message.reply_text("✅ Настройки антиспама обновлены.")
+        except:
+            await message.reply_text("❌ Неверный формат. Используйте: `лимит окно длительность` (числа >0)")
+            return
+        await show_group_menu_from_user(update, chat_id, context)
+        return
+
+async def show_group_menu_from_user(update: Update, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает меню группы в ответ на сообщение пользователя (не через callback)."""
+    settings = get_group_settings(chat_id)
     tariff = settings["tariff"]
     text = (
         f"*Группа:* {chat_id}\n"
@@ -368,25 +468,14 @@ async def show_group_menu(query, chat_id):
         f"*Статистика:* сообщений {settings['stats']['messages']}, нарушений {settings['stats']['violations']}"
     )
     keyboard = [
-        [InlineKeyboardButton("Сменить тариф", callback_data="choose_tariff")],
-        [InlineKeyboardButton("Настроить антиспам", callback_data="configure_flood")],
-        [InlineKeyboardButton("Вкл/Выкл ссылки", callback_data="toggle_links")],
-        [InlineKeyboardButton("Вкл/Выкл медиа", callback_data="toggle_media")],
-        [InlineKeyboardButton("Кастомное приветствие", callback_data="set_welcome")],
+        [InlineKeyboardButton("Сменить тариф", callback_data=f"choose_tariff_{chat_id}")],
+        [InlineKeyboardButton("Настроить антиспам", callback_data=f"configure_flood_{chat_id}")],
+        [InlineKeyboardButton("Вкл/Выкл ссылки", callback_data=f"toggle_links_{chat_id}")],
+        [InlineKeyboardButton("Вкл/Выкл медиа", callback_data=f"toggle_media_{chat_id}")],
+        [InlineKeyboardButton("Кастомное приветствие", callback_data=f"set_welcome_{chat_id}")],
         [InlineKeyboardButton("Назад", callback_data="back_to_groups")],
     ]
-    # Добавляем кнопки для выбора тарифа, если нажата choose_tariff
-    if query.data == "choose_tariff":
-        tariff_buttons = [
-            [InlineKeyboardButton("Бесплатный", callback_data="tariff_free")],
-            [InlineKeyboardButton("Стандартный", callback_data="tariff_standard")],
-            [InlineKeyboardButton("Профессиональный", callback_data="tariff_pro")],
-            [InlineKeyboardButton("Назад", callback_data="group_" + chat_id)]
-        ]
-        await query.edit_message_text("Выберите тариф:", reply_markup=InlineKeyboardMarkup(tariff_buttons))
-        return
-
-    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ---------- АДМИН-ПАНЕЛЬ ----------
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -395,7 +484,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ У вас нет доступа к админ-панели.")
         return
 
-    # Показать меню админа
     text = "🔧 *Админ-панель*\n\n"
     text += f"Всего групп: {len(data['groups'])}\n"
     text += f"Администраторов бота: {len(data['admins'])}"
@@ -403,6 +491,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Список групп", callback_data="admin_groups")],
         [InlineKeyboardButton("Управление админами", callback_data="admin_admins")],
         [InlineKeyboardButton("Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")],
     ]
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -414,8 +503,11 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⛔ Доступ запрещён.")
         return
 
+    if query.data == "close_admin":
+        await query.edit_message_text("Админ-панель закрыта.")
+        return
+
     if query.data == "admin_groups":
-        # Список всех групп
         groups = data["groups"]
         if not groups:
             await query.edit_message_text("Нет групп.")
@@ -429,19 +521,23 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 title = "Недоступно"
             text += f"{title} (ID: {chat_id_str}) – тариф {s['tariff']}\n"
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-    elif query.data == "admin_admins":
-        # Управление админами: показать список и кнопку добавить
+        return
+
+    if query.data == "admin_admins":
         admins = data["admins"]
         text = "*Администраторы бота:*\n"
         for aid in admins:
             text += f"- {aid}\n"
         text += "\nДля добавления введите /addadmin <id>\nДля удаления /deladmin <id>"
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-    elif query.data == "admin_stats":
+        return
+
+    if query.data == "admin_stats":
         total_messages = sum(s["stats"]["messages"] for s in data["groups"].values())
         total_violations = sum(s["stats"]["violations"] for s in data["groups"].values())
         text = f"*Общая статистика*\nСообщений: {total_messages}\nНарушений: {total_violations}"
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+        return
 
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -488,25 +584,25 @@ def main():
         level=logging.INFO
     )
     load_data()
-    load_bad_words()
 
     application = Application.builder().token(TOKEN).build()
 
-    # Обработчики сообщений
+    # Обработчики сообщений (защита)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_message))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_chat_members))
 
-    # Команды
+    # Обработчики команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", menu))
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(CommandHandler("addadmin", add_admin))
     application.add_handler(CommandHandler("deladmin", del_admin))
 
-    # Обработчики кнопок
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|tariff_|choose_tariff|configure_flood|toggle_links|toggle_media|set_welcome|back_to_groups|close)"))
-    application.add_handler(CallbackQueryHandler(admin_callback, pattern="^(admin_groups|admin_admins|admin_stats)"))
+    # Обработчики кнопок и текстовых диалогов
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|choose_tariff_|tariff_|toggle_links_|toggle_media_|set_welcome_|configure_flood_|back_to_groups|close)"))
+    application.add_handler(CallbackQueryHandler(admin_callback, pattern="^(admin_groups|admin_admins|admin_stats|close_admin)"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     application.run_polling()
 
