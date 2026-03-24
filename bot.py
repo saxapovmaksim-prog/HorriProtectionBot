@@ -115,6 +115,7 @@ def get_group_settings(chat_id: int) -> Dict:
         settings = DEFAULT_SETTINGS.copy()
         data["groups"][chat_id_str] = settings
         save_data()
+        logging.info(f"Создана новая запись для группы {chat_id}")
         return settings
     return data["groups"][chat_id_str]
 
@@ -159,13 +160,14 @@ def clean_invalid_groups(context: ContextTypes.DEFAULT_TYPE):
             bot_member = context.bot.get_chat_member(chat_id, context.bot.id)
             if bot_member.status not in ("administrator", "member"):
                 to_delete.append(chat_id_str)
-        except:
+        except Exception as e:
+            logging.warning(f"Ошибка при проверке группы {chat_id_str}: {e}")
             to_delete.append(chat_id_str)
     for chat_id_str in to_delete:
         del data["groups"][chat_id_str]
+        logging.info(f"Удалена неактивная группа {chat_id_str}")
     if to_delete:
         save_data()
-        logging.info(f"Удалено неактивных групп: {to_delete}")
 
 # ---------- ПРОВЕРКИ ----------
 def contains_link(text: str) -> bool:
@@ -243,8 +245,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if bot_member.status in ("administrator", "member"):
                 get_group_settings(chat.id)
                 logging.info(f"Автоматическая регистрация группы {chat.id}")
-        except:
-            pass
+        except Exception as e:
+            logging.warning(f"Не удалось автоматически зарегистрировать группу {chat.id}: {e}")
 
     settings = get_group_settings(chat.id)
     settings["stats"]["messages"] += 1
@@ -348,9 +350,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я бот-защитник чатов.\n"
         "Добавьте меня в группу и назначьте администратором.\n\n"
-        "После добавления бот автоматически зарегистрирует группу, но если этого не произошло,\n"
-        "отправьте команду /register в группе (только администраторы).\n\n"
-        "Используйте /menu для управления моими группами и настройками."
+        "Если бот уже в группе, отправьте команду /register в этой группе (только для администраторов).\n"
+        "После регистрации используйте /menu для настройки."
     )
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -384,14 +385,15 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     groups = data["groups"]
-    clean_invalid_groups(context)
+
+    # Не удаляем группы автоматически, чтобы не потерять только что зарегистрированную
+    # clean_invalid_groups(context) – убрали
 
     if not groups:
         await update.message.reply_text(
             "Вы ещё не добавили меня ни в одну группу.\n"
             "Добавьте бота в группу и назначьте администратором.\n"
-            "После добавления бот автоматически зарегистрирует группу, если это не произошло,\n"
-            "отправьте в группе команду /register."
+            "Затем в группе отправьте команду /register (только для администраторов)."
         )
         return
 
@@ -403,7 +405,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
             title = chat.title or f"Группа {chat_id_str}"
         except:
-            continue
+            title = f"Группа {chat_id_str}"
         keyboard.append([InlineKeyboardButton(title, callback_data=f"group_{chat_id_str}")])
 
     if not keyboard:
@@ -577,6 +579,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("Управление админами", callback_data="admin_admins")],
         [InlineKeyboardButton("Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton("➕ Добавить группу по ID", callback_data="add_group_by_id")],
+        [InlineKeyboardButton("🗑 Очистить неактивные группы", callback_data="clean_groups")],
         [InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")],
     ]
     await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -586,12 +589,6 @@ async def admin_groups_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     groups = data["groups"]
     if not groups:
         await query.edit_message_text("Нет групп.")
-        return
-
-    clean_invalid_groups(context)
-    groups = data["groups"]
-    if not groups:
-        await query.edit_message_text("После очистки групп не осталось.")
         return
 
     keyboard = []
@@ -654,6 +651,14 @@ async def handle_group_id_input(update: Update, context: ContextTypes.DEFAULT_TY
     await message.reply_text(f"✅ Группа {chat.title or chat_id} добавлена в базу бота.")
     # Показываем меню с группами
     await menu(update, context)
+
+async def clean_groups_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    clean_invalid_groups(context)
+    await query.edit_message_text("✅ Неактивные группы удалены.")
+    await asyncio.sleep(1)
+    await admin_panel_callback(update, context)
 
 async def delete_group_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id_str: str):
     query = update.callback_query
@@ -761,6 +766,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data_cb == "add_group_by_id":
         await add_group_by_id_callback(update, context)
+        return
+    if data_cb == "clean_groups":
+        await clean_groups_action(update, context)
         return
 
     # Удаление группы
@@ -940,12 +948,12 @@ def main():
     # Команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", menu))
-    application.add_handler(CommandHandler("register", register))   # Вернули команду
+    application.add_handler(CommandHandler("register", register))
     application.add_handler(CommandHandler("addadmin", add_admin))
     application.add_handler(CommandHandler("deladmin", del_admin))
 
     # Callback'и
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|choose_tariff_|select_tariff_|check_payment_|cancel_payment_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|set_welcome_|configure_flood_|back_to_groups|close|admin_panel|admin_groups|admin_admins|admin_stats|close_admin|delete_group_|confirm_delete_|add_group_by_id)"))
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|choose_tariff_|select_tariff_|check_payment_|cancel_payment_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|set_welcome_|configure_flood_|back_to_groups|close|admin_panel|admin_groups|admin_admins|admin_stats|close_admin|delete_group_|confirm_delete_|add_group_by_id|clean_groups)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logging.info("Бот запущен и готов к работе!")
