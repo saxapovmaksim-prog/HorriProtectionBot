@@ -115,7 +115,7 @@ def get_group_settings(chat_id: int) -> Dict:
         settings = DEFAULT_SETTINGS.copy()
         data["groups"][chat_id_str] = settings
         save_data()
-        logging.info(f"Создана новая запись для группы {chat_id}")
+        logging.info(f"Создана запись для группы {chat_id}")
     return data["groups"][chat_id_str]
 
 def set_group_settings(chat_id: int, settings: Dict):
@@ -237,7 +237,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot:
         return
 
-    # Если это группа или супергруппа и она ещё не зарегистрирована, проверяем, что бот участник, и регистрируем
+    # Если это группа и она ещё не зарегистрирована, пробуем зарегистрировать
     if chat.type in ("group", "supergroup") and str(chat.id) not in data["groups"]:
         try:
             bot_member = await chat.get_member(context.bot.id)
@@ -313,19 +313,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # Запрещённые слова (заглушка)
-    if settings.get("block_bad_words", False) and message.text:
-        # TODO: проверка по списку слов
-        pass
-
-    # Проверка ссылок/файлов (заглушки)
-    if settings.get("check_links", False) and message.text and contains_link(message.text):
-        pass
-    if settings.get("check_files", False) and message.document:
-        pass
-    if settings.get("check_content", False):
-        pass
-
 # ---------- НОВЫЕ УЧАСТНИКИ ----------
 async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -348,31 +335,20 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
             welcome = settings["custom_welcome"] or f"Добро пожаловать, {member.full_name}!"
             await update.message.reply_text(welcome)
 
-# ---------- КОМАНДЫ ----------
+# ---------- МЕНЮ ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Привет! Я бот-защитник чатов.\n\n"
-        "Добавьте меня в группу и назначьте администратором с правом «Блокировка пользователей».\n"
-        "После этого отправьте любое сообщение в группе (или просто напишите что-нибудь), и бот автоматически её зарегистрирует.\n\n"
-        "Затем используйте /menu для управления моими группами и настройками."
-    )
+    await menu(update, context)  # сразу показываем меню
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     groups = data["groups"]
-    clean_invalid_groups(context)
+    clean_invalid_groups(context)  # удаляем неактивные
 
-    if not groups:
-        await update.message.reply_text(
-            "У меня нет добавленных групп.\n\n"
-            "Чтобы добавить группу:\n"
-            "1. Добавьте бота в группу и назначьте администратором.\n"
-            "2. Напишите любое сообщение в этой группе.\n\n"
-            "После этого бот автоматически зарегистрирует группу, и она появится здесь для настройки."
-        )
-        return
-
+    # Формируем кнопки
     keyboard = []
+
+    # Сначала кнопки групп, если они есть
+    group_buttons = []
     for chat_id_str, settings in groups.items():
         try:
             chat = await context.bot.get_chat(int(chat_id_str))
@@ -381,20 +357,199 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title = chat.title or f"Группа {chat_id_str}"
         except:
             title = f"Группа {chat_id_str}"
-        keyboard.append([InlineKeyboardButton(title, callback_data=f"group_{chat_id_str}")])
+        group_buttons.append([InlineKeyboardButton(title, callback_data=f"group_{chat_id_str}")])
 
-    if not keyboard:
-        await update.message.reply_text("Нет активных групп. Возможно, бот вышел из всех групп.")
+    if group_buttons:
+        keyboard.extend(group_buttons)
+        keyboard.append([InlineKeyboardButton("🔄 Синхронизировать группы", callback_data="sync_groups")])
+    else:
+        # Нет групп – показываем инструкцию
+        text = (
+            "У меня нет добавленных групп.\n\n"
+            "Чтобы добавить группу:\n"
+            "1. Добавьте бота в группу и назначьте администратором.\n"
+            "2. Напишите любое сообщение в этой группе (или дождитесь, пока бот будет добавлен, событие должно сработать автоматически).\n"
+            "3. Если не работает, администратор группы может отправить команду /sync (эта команда обновит список).\n\n"
+            "Администраторы бота могут добавить группу вручную через кнопку ниже."
+        )
+        if user_id in data.get("admins", []):
+            keyboard.append([InlineKeyboardButton("➕ Добавить группу по ID", callback_data="add_group_by_id")])
+        keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
+    # Кнопка тарифов (для всех)
+    keyboard.append([InlineKeyboardButton("💰 Тарифы", callback_data="show_tariffs")])
+
+    # Админ-панель для админов бота
     if user_id in data.get("admins", []):
         keyboard.append([InlineKeyboardButton("🔧 Админ панель", callback_data="admin_panel")])
+
     keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
+
     await update.message.reply_text(
-        "Выберите группу для настройки:",
+        "Выберите группу для настройки или используйте другие функции:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+# ---------- ОБРАБОТЧИКИ КНОПОК ----------
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data_cb = query.data
+
+    if data_cb == "close":
+        await query.edit_message_text("Меню закрыто.")
+        return
+
+    if data_cb == "sync_groups":
+        await sync_groups(update, context)
+        return
+
+    if data_cb == "add_group_by_id":
+        await add_group_by_id_callback(update, context)
+        return
+
+    if data_cb == "show_tariffs":
+        await show_tariffs_info(update, context)
+        return
+
+    if data_cb == "admin_panel":
+        await admin_panel_callback(update, context)
+        return
+
+    if data_cb.startswith("group_"):
+        chat_id = int(data_cb.split("_")[1])
+        await show_group_menu(query, chat_id)
+        return
+
+    if data_cb.startswith("choose_tariff_"):
+        chat_id = int(data_cb.split("_")[2])
+        await show_tariff_choice(query, chat_id)
+        return
+
+    if data_cb.startswith("select_tariff_"):
+        parts = data_cb.split("_")
+        tariff = parts[2]
+        chat_id = int(parts[3])
+        await select_tariff(update, context, tariff, chat_id)
+        return
+
+    if data_cb.startswith("check_payment_"):
+        invoice_id = data_cb.split("_")[2]
+        await check_payment(update, context, invoice_id)
+        return
+
+    if data_cb.startswith("cancel_payment_"):
+        chat_id = int(data_cb.split("_")[2])
+        await cancel_payment(update, context, chat_id)
+        return
+
+    if data_cb.startswith("toggle_links_"):
+        chat_id = int(data_cb.split("_")[2])
+        settings = get_group_settings(chat_id)
+        update_group_setting(chat_id, "block_links", not settings["block_links"])
+        await show_group_menu(query, chat_id)
+        return
+
+    if data_cb.startswith("toggle_invite_"):
+        chat_id = int(data_cb.split("_")[2])
+        settings = get_group_settings(chat_id)
+        update_group_setting(chat_id, "invite_links_block", not settings["invite_links_block"])
+        await show_group_menu(query, chat_id)
+        return
+
+    if data_cb.startswith("toggle_caps_"):
+        chat_id = int(data_cb.split("_")[2])
+        settings = get_group_settings(chat_id)
+        update_group_setting(chat_id, "caps_filter", not settings["caps_filter"])
+        await show_group_menu(query, chat_id)
+        return
+
+    if data_cb.startswith("toggle_media_"):
+        chat_id = int(data_cb.split("_")[2])
+        settings = get_group_settings(chat_id)
+        update_group_setting(chat_id, "block_media", not settings["block_media"])
+        await show_group_menu(query, chat_id)
+        return
+
+    if data_cb.startswith("set_welcome_"):
+        chat_id = int(data_cb.split("_")[2])
+        context.user_data["welcome_chat"] = chat_id
+        await query.edit_message_text("Введите текст приветствия (или отправьте пустое сообщение для отключения):")
+        return
+
+    if data_cb.startswith("configure_flood_"):
+        chat_id = int(data_cb.split("_")[2])
+        context.user_data["flood_chat"] = chat_id
+        await query.edit_message_text(
+            "Введите параметры антиспама в формате:\n"
+            "`лимит сообщений окно_секунд длительность_мута_секунд`\n"
+            "Пример: `5 10 60`\n\n"
+            "Или отправьте пустое сообщение для отмены.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    # Админ-панель внутренние кнопки
+    if data_cb == "admin_groups":
+        await admin_groups_list(update, context)
+        return
+    if data_cb == "admin_admins":
+        await admin_admins_menu(update, context)
+        return
+    if data_cb == "admin_stats":
+        await admin_stats(update, context)
+        return
+    if data_cb == "close_admin":
+        await query.edit_message_text("Админ-панель закрыта.")
+        return
+    if data_cb == "clean_groups":
+        await clean_groups_action(update, context)
+        return
+    if data_cb.startswith("delete_group_"):
+        chat_id_str = data_cb.split("_")[2]
+        await delete_group_confirm(update, context, chat_id_str)
+        return
+    if data_cb.startswith("confirm_delete_"):
+        chat_id_str = data_cb.split("_")[2]
+        await confirm_delete_group(update, context, chat_id_str)
+        return
+    if data_cb == "back_to_groups":
+        await menu(update, context)
+        return
+
+async def show_tariffs_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    text = (
+        "*Доступные тарифы:*\n\n"
+        "🆓 *Бесплатный* – 0 руб.\n"
+        "• Антиспам\n"
+        "• Блокировка ссылок\n"
+        "• Отправка ссылок на проверку\n\n"
+        "⭐ *Стандартный* – 99 руб.\n"
+        "• Улучшенный антиспам\n"
+        "• Блокировка медиа\n"
+        "• Кастомное приветствие\n"
+        "• Отправка файлов на проверку\n\n"
+        "💎 *Профессиональный* – 199 руб.\n"
+        "• Жёсткий антиспам\n"
+        "• Проверка запрещённого контента\n"
+        "• Все функции стандартного тарифа\n\n"
+        "Для активации платного тарифа выберите группу и нажмите «Сменить тариф»."
+    )
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_groups")]]
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def sync_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Принудительная синхронизация: удаляет неактивные группы и пробует найти новые (по сообщениям не получится, но хотя бы очистим)."""
+    query = update.callback_query
+    clean_invalid_groups(context)
+    await query.edit_message_text("✅ Синхронизация завершена. Неактивные группы удалены.")
+    await asyncio.sleep(1)
+    await menu(update, context)
+
+# ---------- МЕНЮ ГРУППЫ ----------
 async def show_group_menu(query, chat_id_int: int):
     settings = get_group_settings(chat_id_int)
     tariff = settings["tariff"]
@@ -442,7 +597,7 @@ def create_crypto_invoice(amount_usd: float, description: str) -> Optional[Dict]
         "amount": amount_usd,
         "description": description,
         "paid_btn_name": "callback",
-        "paid_btn_url": "https://t.me/YourBotUsername"  # замените на имя бота
+        "paid_btn_url": "https://t.me/YourBotUsername"
     }
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
@@ -566,6 +721,12 @@ async def admin_groups_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Нет групп.")
         return
 
+    clean_invalid_groups(context)
+    groups = data["groups"]
+    if not groups:
+        await query.edit_message_text("После очистки групп не осталось.")
+        return
+
     keyboard = []
     for chat_id_str, settings in groups.items():
         try:
@@ -590,7 +751,6 @@ async def add_group_by_id_callback(update: Update, context: ContextTypes.DEFAULT
     context.user_data["waiting_for_group_id"] = True
 
 async def handle_group_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ввода ID группы для добавления."""
     message = update.message
     user_id = update.effective_user.id
     if user_id not in data.get("admins", []):
@@ -605,7 +765,6 @@ async def handle_group_id_input(update: Update, context: ContextTypes.DEFAULT_TY
         await message.reply_text("❌ Неверный формат. Введите числовой ID.")
         return
 
-    # Проверяем, что бот есть в группе и может её добавить
     try:
         chat = await context.bot.get_chat(chat_id)
         if chat.type not in ("group", "supergroup"):
@@ -621,10 +780,8 @@ async def handle_group_id_input(update: Update, context: ContextTypes.DEFAULT_TY
         await message.reply_text(f"❌ Ошибка при проверке группы: {e}")
         return
 
-    # Добавляем группу
     get_group_settings(chat_id)
     await message.reply_text(f"✅ Группа {chat.title or chat_id} добавлена в базу бота.")
-    # Показываем меню с группами
     await menu(update, context)
 
 async def clean_groups_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -712,122 +869,7 @@ async def del_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Ошибка.")
 
-# ---------- ОБРАБОТЧИКИ КНОПОК ----------
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data_cb = query.data
-
-    # Общие
-    if data_cb == "close":
-        await query.edit_message_text("Меню закрыто.")
-        return
-    if data_cb == "back_to_groups":
-        await menu(update, context)
-        return
-    if data_cb == "admin_panel":
-        await admin_panel_callback(update, context)
-        return
-    if data_cb == "admin_groups":
-        await admin_groups_list(update, context)
-        return
-    if data_cb == "admin_admins":
-        await admin_admins_menu(update, context)
-        return
-    if data_cb == "admin_stats":
-        await admin_stats(update, context)
-        return
-    if data_cb == "close_admin":
-        await query.edit_message_text("Админ-панель закрыта.")
-        return
-    if data_cb == "add_group_by_id":
-        await add_group_by_id_callback(update, context)
-        return
-    if data_cb == "clean_groups":
-        await clean_groups_action(update, context)
-        return
-
-    # Удаление группы
-    if data_cb.startswith("delete_group_"):
-        chat_id_str = data_cb.split("_")[2]
-        await delete_group_confirm(update, context, chat_id_str)
-        return
-    if data_cb.startswith("confirm_delete_"):
-        chat_id_str = data_cb.split("_")[2]
-        await confirm_delete_group(update, context, chat_id_str)
-        return
-
-    # Группа из списка
-    if data_cb.startswith("group_"):
-        chat_id = int(data_cb.split("_")[1])
-        await show_group_menu(query, chat_id)
-        return
-
-    # Выбор тарифа
-    if data_cb.startswith("choose_tariff_"):
-        chat_id = int(data_cb.split("_")[2])
-        await show_tariff_choice(query, chat_id)
-        return
-    if data_cb.startswith("select_tariff_"):
-        parts = data_cb.split("_")
-        tariff = parts[2]
-        chat_id = int(parts[3])
-        await select_tariff(update, context, tariff, chat_id)
-        return
-
-    # Проверка/отмена оплаты
-    if data_cb.startswith("check_payment_"):
-        invoice_id = data_cb.split("_")[2]
-        await check_payment(update, context, invoice_id)
-        return
-    if data_cb.startswith("cancel_payment_"):
-        chat_id = int(data_cb.split("_")[2])
-        await cancel_payment(update, context, chat_id)
-        return
-
-    # Переключения
-    if data_cb.startswith("toggle_links_"):
-        chat_id = int(data_cb.split("_")[2])
-        settings = get_group_settings(chat_id)
-        update_group_setting(chat_id, "block_links", not settings["block_links"])
-        await show_group_menu(query, chat_id)
-        return
-    if data_cb.startswith("toggle_invite_"):
-        chat_id = int(data_cb.split("_")[2])
-        settings = get_group_settings(chat_id)
-        update_group_setting(chat_id, "invite_links_block", not settings["invite_links_block"])
-        await show_group_menu(query, chat_id)
-        return
-    if data_cb.startswith("toggle_caps_"):
-        chat_id = int(data_cb.split("_")[2])
-        settings = get_group_settings(chat_id)
-        update_group_setting(chat_id, "caps_filter", not settings["caps_filter"])
-        await show_group_menu(query, chat_id)
-        return
-    if data_cb.startswith("toggle_media_"):
-        chat_id = int(data_cb.split("_")[2])
-        settings = get_group_settings(chat_id)
-        update_group_setting(chat_id, "block_media", not settings["block_media"])
-        await show_group_menu(query, chat_id)
-        return
-
-    # Настройка антиспама / приветствия
-    if data_cb.startswith("set_welcome_"):
-        chat_id = int(data_cb.split("_")[2])
-        context.user_data["welcome_chat"] = chat_id
-        await query.edit_message_text("Введите текст приветствия (или отправьте пустое сообщение для отключения):")
-        return
-    if data_cb.startswith("configure_flood_"):
-        chat_id = int(data_cb.split("_")[2])
-        context.user_data["flood_chat"] = chat_id
-        await query.edit_message_text(
-            "Введите параметры антиспама в формате:\n"
-            "`лимит сообщений окно_секунд длительность_мута_секунд`\n"
-            "Пример: `5 10 60`\n\n"
-            "Или отправьте пустое сообщение для отмены.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-
+# ---------- ОБРАБОТЧИК ТЕКСТА ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка ввода приветствия, антиспама и ID группы."""
     message = update.message
@@ -874,7 +916,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def show_group_menu_from_user(update: Update, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает меню группы как обычное сообщение."""
     settings = get_group_settings(chat_id)
     tariff = settings["tariff"]
     text = (
@@ -927,7 +968,7 @@ def main():
     application.add_handler(CommandHandler("deladmin", del_admin))
 
     # Callback'и
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|choose_tariff_|select_tariff_|check_payment_|cancel_payment_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|set_welcome_|configure_flood_|back_to_groups|close|admin_panel|admin_groups|admin_admins|admin_stats|close_admin|delete_group_|confirm_delete_|add_group_by_id|clean_groups)"))
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|choose_tariff_|select_tariff_|check_payment_|cancel_payment_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|set_welcome_|configure_flood_|back_to_groups|close|admin_panel|admin_groups|admin_admins|admin_stats|close_admin|delete_group_|confirm_delete_|add_group_by_id|clean_groups|show_tariffs|sync_groups)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logging.info("Бот запущен и готов к работе!")
