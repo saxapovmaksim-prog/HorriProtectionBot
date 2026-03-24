@@ -1,4 +1,3 @@
-```python
 import asyncio
 import json
 import logging
@@ -68,7 +67,7 @@ DEFAULT_SETTINGS = {
     "check_files": False,
     "check_content": False,
     "caps_filter": False,
-    "caps_threshold": 70,                # % заглавных букв для срабатывания
+    "caps_threshold": 70,
     "invite_links_block": True,
     "stats": {"messages": 0, "violations": 0}
 }
@@ -293,7 +292,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if settings.get("caps_filter", False) and message.text:
             threshold = settings.get("caps_threshold", 70)
             if is_caps_abuse(message.text, threshold):
-                await restrict_user(chat.id, user.id, 1800, f"CAPS (> {threshold}%)", context)  # 30 минут = 1800 сек
+                await restrict_user(chat.id, user.id, 1800, f"CAPS (> {threshold}%)", context)  # 30 мин
                 try:
                     await message.delete()
                 except:
@@ -474,7 +473,6 @@ async def set_caps_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
     update_group_setting(chat_id, "caps_threshold", threshold)
     await query.answer(f"Порог CAPS установлен на {threshold}%")
-    # Возвращаемся к меню группы
     await show_group_settings(query, chat_id)
 
 # ---------- ПЕРЕКЛЮЧЕНИЯ ----------
@@ -499,7 +497,7 @@ async def change_flood_parameter(update: Update, context: ContextTypes.DEFAULT_T
     new_val = max(1, current + delta)
     update_group_setting(chat_id, param, new_val)
     await query.answer(f"{param} изменён на {new_val}")
-    await anti_spam_menu(update, context, chat_id)  # вернуться в меню антиспама
+    await anti_spam_menu(update, context, chat_id)
 
 # ---------- ПРОФИЛЬ ----------
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -972,4 +970,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
