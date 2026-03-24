@@ -163,7 +163,6 @@ def update_group_setting(chat_id: int, key: str, value):
 def register_user(user_id: int) -> Dict:
     uid = str(user_id)
     if uid not in user_data:
-        # Главный админ сразу получает PRO бессрочно
         if user_id == ADMIN_ID:
             user_data[uid] = {
                 "registered": datetime.now().isoformat(),
@@ -259,32 +258,6 @@ async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, 
     except Exception as e:
         logging.error(f"Не удалось ограничить пользователя {user_id} в чате {chat_id}: {e}")
 
-# ---------- АВТОМАТИЧЕСКОЕ ОБНАРУЖЕНИЕ ГРУПП ----------
-async def update_all_groups(context: ContextTypes.DEFAULT_TYPE):
-    """Перебирает все чаты, где бот состоит, и добавляет недостающие в базу."""
-    try:
-        # Получаем обновления, чтобы увидеть чаты, где бот есть
-        # Проще всего: при старте и периодически проверять через get_updates не получится,
-        # поэтому используем сохранённые группы и принудительно проверяем, что бот в них.
-        # Для обнаружения новых групп нужно использовать событие добавления бота.
-        # Добавим функцию, которая принудительно добавляет группу, если бот в ней.
-        # Для админа вручную можно будет добавить.
-        pass
-    except Exception as e:
-        logging.error(f"Ошибка обновления групп: {e}")
-
-async def check_and_register_group(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Проверяет, что бот является участником, и если группа не в базе – добавляет."""
-    if str(chat_id) in data["groups"]:
-        return
-    try:
-        bot_member = await context.bot.get_chat_member(chat_id, context.bot.id)
-        if bot_member.status in ("administrator", "member"):
-            get_group_settings(chat_id)
-            logging.info(f"Автоматическая регистрация группы {chat_id} при проверке")
-    except Exception as e:
-        logging.warning(f"Не удалось проверить группу {chat_id}: {e}")
-
 # ---------- ЗАЩИТА СООБЩЕНИЙ ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_chat or not update.effective_user:
@@ -296,27 +269,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot:
         return
 
-    # Если это группа, проверяем регистрацию
     if chat.type in ("group", "supergroup"):
-        # Автоматическая регистрация, если бот в группе, но она не в базе
         if str(chat.id) not in data["groups"]:
-            await check_and_register_group(chat.id, context)
+            try:
+                bot_member = await chat.get_member(context.bot.id)
+                if bot_member.status in ("administrator", "member"):
+                    get_group_settings(chat.id)
+            except:
+                pass
 
-        # Если группа всё ещё не зарегистрирована, не применяем защиту
         if str(chat.id) not in data["groups"]:
             return
 
         settings = get_group_settings(chat.id)
-
-        # Статистика
         settings["stats"]["messages"] += 1
         set_group_settings(chat.id, settings)
 
-        # Если пользователь админ – пропускаем проверки
         if await is_group_admin(chat.id, user.id, context):
             return
 
-        # Проверка прав бота
         try:
             bot_member = await chat.get_member(context.bot.id)
             if not bot_member.can_restrict_members:
@@ -324,7 +295,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             return
 
-        # Антифлуд
         if is_flooding(user.id, chat.id):
             await restrict_user(chat.id, user.id, settings["flood_mute"], "Флуд", context)
             try:
@@ -333,7 +303,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Блокировка ссылок
         if settings.get("block_links", True) and message.text and contains_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
             try:
@@ -342,7 +311,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Инвайт-ссылки
         if settings.get("invite_links_block", True) and message.text and contains_invite_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые инвайт-ссылки", context)
             try:
@@ -351,7 +319,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # CAPS (с учётом порога)
         if settings.get("caps_filter", False) and message.text:
             threshold = settings.get("caps_threshold", 70)
             if is_caps_abuse(message.text, threshold):
@@ -362,7 +329,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
                 return
 
-        # Блокировка медиа
         if settings.get("block_media", False) and any((message.photo, message.video, message.document,
                                                        message.voice, message.audio, message.animation, message.sticker)):
             await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
@@ -372,7 +338,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Отправка файлов на проверку
         if settings.get("check_files", False) and message.document:
             await message.reply_text("📁 Файл отправлен на проверку")
             await message.delete()
@@ -382,7 +347,6 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
     chat = update.effective_chat
     for member in update.message.new_chat_members:
         if member.id == context.bot.id:
-            # Бот добавлен – регистрируем группу
             get_group_settings(chat.id)
             await update.message.reply_text(
                 "🤖 *Бот-защитник активирован!*\n\n"
@@ -468,34 +432,27 @@ async def show_group_settings(query, chat_id: int):
     )
     keyboard = []
 
-    # Кнопки настроек – показываем все, но для недоступных добавляем 🔒
-    # Антиспам доступен всем
     keyboard.append([InlineKeyboardButton("⚙️ Антиспам", callback_data=f"anti_spam_{chat_id}")])
 
-    # CAPS: если недоступен – кнопка с замком
     if allowed_features["caps_filter"]:
         keyboard.append([InlineKeyboardButton("🔠 CAPS порог", callback_data=f"caps_threshold_{chat_id}")])
         keyboard.append([InlineKeyboardButton("🔠 CAPS: Вкл/Выкл", callback_data=f"toggle_caps_{chat_id}")])
     else:
         keyboard.append([InlineKeyboardButton("🔒 CAPS (доступно на платных тарифах)", callback_data="noop")])
 
-    # Ссылки доступны всем, но можно добавить блокировку
     keyboard.append([InlineKeyboardButton("🔗 Ссылки: Вкл/Выкл", callback_data=f"toggle_links_{chat_id}")])
     keyboard.append([InlineKeyboardButton("🚫 Инвайт-ссылки: Вкл/Выкл", callback_data=f"toggle_invite_{chat_id}")])
 
-    # Медиа
     if allowed_features["block_media"]:
         keyboard.append([InlineKeyboardButton("📷 Медиа: Вкл/Выкл", callback_data=f"toggle_media_{chat_id}")])
     else:
         keyboard.append([InlineKeyboardButton("🔒 Медиа (доступно на платных тарифах)", callback_data="noop")])
 
-    # Приветствие
     if allowed_features["custom_welcome"]:
         keyboard.append([InlineKeyboardButton("✏️ Кастомное приветствие", callback_data=f"set_welcome_{chat_id}")])
     else:
         keyboard.append([InlineKeyboardButton("🔒 Приветствие (доступно на платных тарифах)", callback_data="noop")])
 
-    # Проверка файлов
     if allowed_features["check_files"]:
         keyboard.append([InlineKeyboardButton("📁 Проверка файлов: Вкл/Выкл", callback_data=f"toggle_files_{chat_id}")])
     else:
@@ -721,7 +678,7 @@ def create_crypto_invoice(amount_usd: float, description: str) -> Optional[Dict]
         "amount": amount_usd,
         "description": description,
         "paid_btn_name": "callback",
-        "paid_btn_url": "https://t.me/YourBotUsername"  # замените на имя бота
+        "paid_btn_url": "https://t.me/YourBotUsername"
     }
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
@@ -791,14 +748,10 @@ async def admin_group_info_request(update: Update, context: ContextTypes.DEFAULT
     await query.edit_message_text("Админ-панель ожидает ввод ID...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
 
 async def admin_refresh_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обновляет список групп, добавляя все, где бот состоит, которых нет в базе."""
     query = update.callback_query
     if update.effective_user.id != ADMIN_ID:
         await query.edit_message_text("⛔ У вас нет доступа.")
         return
-    added = 0
-    # Получить все чаты, где бот есть, сложно без get_updates. Поэтому просто проверим существующие
-    # и добавим группы, которые в базе, но бот вышел – удалим.
     to_delete = []
     for cid_str in list(data["groups"].keys()):
         try:
@@ -813,10 +766,7 @@ async def admin_refresh_groups(update: Update, context: ContextTypes.DEFAULT_TYP
         logging.info(f"Удалена группа {cid_str} (бот вышел)")
     if to_delete:
         save_data()
-    # Теперь попробуем добавить группы, где бот есть, но их нет в базе.
-    # Для этого нужны update.effective_chat из сообщений, но мы не можем их получить просто так.
-    # Поэтому оставим как есть, а админ может добавить вручную через админ-панель.
-    await query.edit_message_text(f"✅ Обновление завершено. Удалено неактивных групп: {len(to_delete)}. Для добавления новых групп используйте кнопку «Добавить группу по ID».", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
+    await query.edit_message_text(f"✅ Обновление завершено. Удалено неактивных групп: {len(to_delete)}.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
 
 async def show_group_info(chat_id: int, message, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -859,7 +809,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat = update.effective_chat
 
-    # Ожидание ввода ID группы для админа
     if user_id == ADMIN_ID and user_states.get(user_id) == "await_group_id":
         try:
             chat_id = int(message.text.strip())
@@ -869,7 +818,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del user_states[user_id]
         return
 
-    # Настройка антиспама (только в личных сообщениях)
     if chat.type == "private" and "flood_chat" in context.user_data:
         chat_id = context.user_data.pop("flood_chat")
         text = message.text.strip()
@@ -890,11 +838,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             await message.reply_text("❌ Неверный формат. Используйте: `лимит окно длительность` (числа >0)")
             return
-        # Показываем меню группы
         await show_group_settings_from_user(message, chat_id, context)
         return
 
-    # Настройка приветствия
     if chat.type == "private" and "welcome_chat" in context.user_data:
         chat_id = context.user_data.pop("welcome_chat")
         text = message.text.strip()
@@ -908,7 +854,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def show_group_settings_from_user(message, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает меню настроек группы как обычное сообщение (после ввода)."""
     user_id = message.from_user.id
     user_tariff = get_user_tariff(user_id)
     settings = get_group_settings(chat_id)
@@ -960,12 +905,14 @@ async def show_group_settings_from_user(message, chat_id: int, context: ContextT
 # ---------- ОСНОВНОЙ CALLBACK ОБРАБОТЧИК ----------
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     data_cb = query.data
+    logging.info(f"Callback received: {data_cb}")  # отладка
 
+    # Обработка главного меню
     if data_cb == "main_menu":
         await menu(update, context)
         return
+
     if data_cb == "groups":
         await show_groups(update, context)
         return
@@ -976,10 +923,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_profile(update, context)
         return
     if data_cb == "noop":
-        # Заглушка для недоступных кнопок
+        await query.answer()
         return
 
-    # Информация о тарифе
+    # Тарифы
     if data_cb.startswith("tariff_info_"):
         tariff = data_cb.split("_")[2]
         await show_tariff_info(update, context, tariff)
@@ -1003,7 +950,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_refresh_groups(update, context)
         return
 
-    # Группа
+    # Группы
     if data_cb.startswith("group_"):
         chat_id = int(data_cb.split("_")[1])
         await show_group_settings(query, chat_id)
@@ -1039,7 +986,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await change_flood_parameter(update, context, "flood_mute", -30, chat_id)
         return
 
-    # CAPS порог
+    # CAPS
     if data_cb.startswith("caps_threshold_"):
         chat_id = int(data_cb.split("_")[2])
         await caps_threshold_menu(update, context, chat_id)
@@ -1051,7 +998,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await set_caps_threshold(update, context, threshold, chat_id)
         return
 
-    # Переключения
+    # Переключатели
     if data_cb.startswith("toggle_links_"):
         chat_id = int(data_cb.split("_")[2])
         await toggle_setting(update, context, "block_links", chat_id)
@@ -1086,6 +1033,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await check_payment(update, context, invoice_id)
         return
 
+    # Если ничего не подошло
+    await query.answer("Действие не распознано", show_alert=False)
+
 # ---------- ЗАПУСК ----------
 def main():
     logging.basicConfig(
@@ -1096,16 +1046,13 @@ def main():
 
     application = Application.builder().token(TOKEN).build()
 
-    # Защита
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_message))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_chat_members))
 
-    # Команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", menu))
 
-    # Обработчики кнопок и текста
     application.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|groups|show_tariffs|profile|tariff_info_|buy_|admin_panel|admin_stats|admin_group_info|admin_refresh_groups|group_|anti_spam_|limit_inc_|limit_dec_|window_inc_|window_dec_|mute_inc_|mute_dec_|caps_threshold_|select_caps_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|set_welcome_|check_payment_|noop)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
