@@ -366,9 +366,10 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     register_user(user_id)
-    await menu(update, context)
+    await show_main_menu(update, context)
 
-async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message=False, chat_id=None, message_id=None):
+    """Отображает главное меню. Если edit_message=True, редактирует существующее сообщение."""
     user_id = update.effective_user.id
     keyboard = [
         [InlineKeyboardButton("👤 Профиль", callback_data="profile")],
@@ -377,11 +378,21 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     if user_id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton("👑 Админ панель", callback_data="admin_panel")])
-    await update.message.reply_text(
-        "👋 *Главное меню*\nВыберите действие:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+
+    if edit_message and chat_id and message_id:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text="👋 *Главное меню*\nВыберите действие:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            "👋 *Главное меню*\nВыберите действие:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
 
 # ---------- СПИСОК ГРУПП ----------
 async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -906,11 +917,11 @@ async def show_group_settings_from_user(message, chat_id: int, context: ContextT
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data_cb = query.data
-    logging.info(f"Callback received: {data_cb}")  # отладка
+    logging.info(f"Callback: {data_cb}")
 
     # Обработка главного меню
     if data_cb == "main_menu":
-        await menu(update, context)
+        await show_main_menu(update, context, edit_message=True, chat_id=query.message.chat_id, message_id=query.message.message_id)
         return
 
     if data_cb == "groups":
@@ -1033,7 +1044,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await check_payment(update, context, invoice_id)
         return
 
-    # Если ничего не подошло
     await query.answer("Действие не распознано", show_alert=False)
 
 # ---------- ЗАПУСК ----------
@@ -1051,7 +1061,7 @@ def main():
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_chat_members))
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("menu", menu))
+    application.add_handler(CommandHandler("menu", start))  # /menu тоже показывает главное меню
 
     application.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|groups|show_tariffs|profile|tariff_info_|buy_|admin_panel|admin_stats|admin_group_info|admin_refresh_groups|group_|anti_spam_|limit_inc_|limit_dec_|window_inc_|window_dec_|mute_inc_|mute_dec_|caps_threshold_|select_caps_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|set_welcome_|check_payment_|noop)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
