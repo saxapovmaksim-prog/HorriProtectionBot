@@ -238,7 +238,8 @@ async def is_group_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAU
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         return member.status in ("administrator", "creator")
-    except:
+    except Exception as e:
+        logging.warning(f"Ошибка проверки админа {user_id} в {chat_id}: {e}")
         return False
 
 async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
@@ -269,15 +270,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot:
         return
 
+    # Если это группа
     if chat.type in ("group", "supergroup"):
+        # Проверяем, есть ли группа в базе
         if str(chat.id) not in data["groups"]:
             try:
                 bot_member = await chat.get_member(context.bot.id)
                 if bot_member.status in ("administrator", "member"):
                     get_group_settings(chat.id)
-            except:
-                pass
+                    logging.info(f"Автоматическая регистрация группы {chat.id} при получении сообщения")
+            except Exception as e:
+                logging.warning(f"Не удалось зарегистрировать группу {chat.id}: {e}")
+                return  # не можем продолжить, если не знаем группу
 
+        # Если группа всё ещё не зарегистрирована, выходим
         if str(chat.id) not in data["groups"]:
             return
 
@@ -285,9 +291,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         settings["stats"]["messages"] += 1
         set_group_settings(chat.id, settings)
 
+        # Пропускаем проверки для администраторов группы
         if await is_group_admin(chat.id, user.id, context):
             return
 
+        # Проверка прав бота
         try:
             bot_member = await chat.get_member(context.bot.id)
             if not bot_member.can_restrict_members:
@@ -295,6 +303,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             return
 
+        # Антифлуд
         if is_flooding(user.id, chat.id):
             await restrict_user(chat.id, user.id, settings["flood_mute"], "Флуд", context)
             try:
@@ -303,6 +312,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
+        # Блокировка ссылок
         if settings.get("block_links", True) and message.text and contains_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
             try:
@@ -311,6 +321,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
+        # Инвайт-ссылки
         if settings.get("invite_links_block", True) and message.text and contains_invite_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые инвайт-ссылки", context)
             try:
@@ -319,6 +330,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
+        # CAPS (с учётом порога)
         if settings.get("caps_filter", False) and message.text:
             threshold = settings.get("caps_threshold", 70)
             if is_caps_abuse(message.text, threshold):
@@ -329,6 +341,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
                 return
 
+        # Блокировка медиа
         if settings.get("block_media", False) and any((message.photo, message.video, message.document,
                                                        message.voice, message.audio, message.animation, message.sticker)):
             await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
@@ -338,6 +351,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
+        # Отправка файлов на проверку
         if settings.get("check_files", False) and message.document:
             await message.reply_text("📁 Файл отправлен на проверку")
             await message.delete()
@@ -420,6 +434,8 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_group_settings(query, chat_id: int):
     user_id = query.from_user.id
+
+    # Проверяем, является ли пользователь администратором группы
     if not await is_group_admin(chat_id, user_id, query.message.get_bot()):
         await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
         return
@@ -917,7 +933,6 @@ async def show_group_settings_from_user(message, chat_id: int, context: ContextT
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data_cb = query.data
-    logging.info(f"Callback: {data_cb}")
 
     # Обработка главного меню
     if data_cb == "main_menu":
@@ -1061,7 +1076,7 @@ def main():
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_chat_members))
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("menu", start))  # /menu тоже показывает главное меню
+    application.add_handler(CommandHandler("menu", start))
 
     application.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|groups|show_tariffs|profile|tariff_info_|buy_|admin_panel|admin_stats|admin_group_info|admin_refresh_groups|group_|anti_spam_|limit_inc_|limit_dec_|window_inc_|window_dec_|mute_inc_|mute_dec_|caps_threshold_|select_caps_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|set_welcome_|check_payment_|noop)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
