@@ -479,12 +479,12 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
     await query.edit_message_text("📋 *Список групп:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-async def show_group_settings(query, chat_id: int):
+async def show_group_settings(query, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
     # Проверка, что бот является администратором группы
     try:
-        bot_member = await query.message.get_bot().get_chat_member(chat_id, query.message.get_bot().id)
+        bot_member = await context.bot.get_chat_member(chat_id, context.bot.id)
         if bot_member.status != "administrator":
             await query.answer("⚠️ Бот не является администратором группы. Назначьте его администратором и повторите попытку.", show_alert=True)
             return
@@ -494,7 +494,7 @@ async def show_group_settings(query, chat_id: int):
         return
 
     # Проверка, что пользователь администратор группы
-    if not await is_group_admin(chat_id, user_id, query.message.get_bot()):
+    if not await is_group_admin(chat_id, user_id, context):
         await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
         return
 
@@ -605,7 +605,7 @@ async def caps_threshold_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def set_caps_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE, threshold: int, chat_id: int):
     query = update.callback_query
     user_id = query.from_user.id
-    if not await is_group_admin(chat_id, user_id, query.message.get_bot()):
+    if not await is_group_admin(chat_id, user_id, context):
         await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
         return
     g = get_group_data(chat_id)
@@ -618,13 +618,13 @@ async def set_caps_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
     update_group_setting(chat_id, "caps_threshold", threshold)
     await query.answer(f"Порог CAPS установлен на {threshold}%")
-    await show_group_settings(query, chat_id)
+    await show_group_settings(query, chat_id, context)
 
 # ---------- ПЕРЕКЛЮЧЕНИЯ ----------
 async def toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, setting: str, chat_id: int):
     query = update.callback_query
     user_id = query.from_user.id
-    if not await is_group_admin(chat_id, user_id, query.message.get_bot()):
+    if not await is_group_admin(chat_id, user_id, context):
         await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
         return
     g = get_group_data(chat_id)
@@ -641,12 +641,12 @@ async def toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, set
     new_val = not settings[setting]
     update_group_setting(chat_id, setting, new_val)
     await query.answer(f"{setting.replace('_',' ').title()} {'включена' if new_val else 'выключена'}")
-    await show_group_settings(query, chat_id)
+    await show_group_settings(query, chat_id, context)
 
 async def change_flood_parameter(update: Update, context: ContextTypes.DEFAULT_TYPE, param: str, delta: int, chat_id: int):
     query = update.callback_query
     user_id = query.from_user.id
-    if not await is_group_admin(chat_id, user_id, query.message.get_bot()):
+    if not await is_group_admin(chat_id, user_id, context):
         await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
         return
     settings = get_group_settings(chat_id)
@@ -1049,7 +1049,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Группы
     if data_cb.startswith("group_"):
         chat_id = int(data_cb.split("_")[1])
-        await show_group_settings(query, chat_id)
+        await show_group_settings(query, chat_id, context)
         return
 
     # Антиспам
