@@ -36,7 +36,7 @@ TARIFF_FEATURES = {
         "check_content": False,
         "caps_filter": False,
         "invite_links_block": True,
-        "strict_flood": False      # улучшенный антифлуд
+        "strict_flood": False
     },
     "standard": {
         "block_links": True,
@@ -154,9 +154,7 @@ def save_user_data():
 
 def get_group_data(chat_id: int) -> Dict:
     cid = str(chat_id)
-    if cid not in data["groups"]:
-        return None
-    return data["groups"][cid]
+    return data["groups"].get(cid)
 
 def create_group(chat_id: int, owner_id: int) -> Dict:
     cid = str(chat_id)
@@ -169,9 +167,7 @@ def create_group(chat_id: int, owner_id: int) -> Dict:
 
 def get_group_settings(chat_id: int) -> Dict:
     g = get_group_data(chat_id)
-    if not g:
-        return None
-    return g["settings"]
+    return g["settings"] if g else None
 
 def update_group_setting(chat_id: int, key: str, value):
     g = get_group_data(chat_id)
@@ -288,14 +284,12 @@ async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, 
         settings = get_group_settings(chat_id)
         if settings:
             settings["stats"]["violations"] += 1
-            # Сохраняем историю
             settings["stats"]["history"].append({
                 "user": user_id,
                 "time": datetime.now().isoformat(),
                 "reason": reason,
                 "duration": duration
             })
-            # Ограничим историю 100 записями
             if len(settings["stats"]["history"]) > 100:
                 settings["stats"]["history"] = settings["stats"]["history"][-100:]
             update_group_setting(chat_id, "stats", settings["stats"])
@@ -322,15 +316,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not settings:
             return
 
-        # Статистика сообщений
         settings["stats"]["messages"] += 1
         update_group_setting(chat.id, "stats", settings["stats"])
 
-        # Пропускаем администраторов
         if await is_group_admin(chat.id, user.id, context):
             return
 
-        # Проверка прав бота
         try:
             bot_member = await chat.get_member(context.bot.id)
             if bot_member.status != "administrator" or not bot_member.can_restrict_members:
@@ -338,7 +329,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             return
 
-        # Улучшенный антифлуд для платных тарифов
         g = get_group_data(chat.id)
         owner_tariff = get_user_tariff(g["owner"])
         if TARIFF_FEATURES[owner_tariff].get("strict_flood", False):
@@ -350,7 +340,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
                 return
 
-        # Обычный антифлуд
         if is_flooding(user.id, chat.id):
             await restrict_user(chat.id, user.id, settings["flood_mute"], "Флуд", context)
             try:
@@ -359,7 +348,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Блокировка ссылок
         if settings.get("block_links", True) and message.text and contains_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
             try:
@@ -368,7 +356,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Инвайт-ссылки
         if settings.get("invite_links_block", True) and message.text and contains_invite_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые инвайт-ссылки", context)
             try:
@@ -377,7 +364,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # CAPS
         if settings.get("caps_filter", False) and message.text:
             threshold = settings.get("caps_threshold", 70)
             if is_caps_abuse(message.text, threshold):
@@ -388,7 +374,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
                 return
 
-        # Блокировка медиа
         if settings.get("block_media", False) and any((message.photo, message.video, message.document,
                                                        message.voice, message.audio, message.animation, message.sticker)):
             await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
@@ -398,12 +383,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Отправка файлов на проверку
         if settings.get("check_files", False) and message.document:
             await message.reply_text("📁 Файл отправлен на проверку")
             await message.delete()
 
-        # AI-проверка контента (заглушка для PRO)
         if settings.get("check_content", False):
             # Здесь будет вызов AI-модерации
             pass
@@ -529,7 +512,6 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_group_settings(query, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
-    # Проверка, что бот является администратором группы
     try:
         bot_member = await context.bot.get_chat_member(chat_id, context.bot.id)
         if bot_member.status != "administrator":
@@ -540,7 +522,6 @@ async def show_group_settings(query, chat_id: int, context: ContextTypes.DEFAULT
         await query.answer("❌ Не удалось проверить права бота.", show_alert=True)
         return
 
-    # Проверка, что пользователь администратор группы
     if not await is_group_admin(chat_id, user_id, context):
         await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
         return
@@ -821,7 +802,6 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id == ADMIN_ID:
         text += "\n👑 *Вы являетесь главным администратором бота.*"
 
-    # Группы, где пользователь является администратором
     admin_groups = []
     for cid, g in data["groups"].items():
         try:
@@ -1176,7 +1156,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
 
-    # Тарифы
     if data_cb.startswith("tariff_info_"):
         tariff = data_cb.split("_")[2]
         await show_tariff_info(update, context, tariff)
@@ -1186,7 +1165,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await buy_tariff(update, context, tariff)
         return
 
-    # Админ-панель
     if data_cb == "admin_panel":
         await admin_panel(update, context)
         return
@@ -1197,19 +1175,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_group_info_request(update, context)
         return
 
-    # Группы
     if data_cb.startswith("group_"):
         chat_id = int(data_cb.split("_")[1])
         await show_group_settings(query, chat_id, context)
         return
 
-    # Статистика
     if data_cb.startswith("stats_"):
         chat_id = int(data_cb.split("_")[1])
         await show_stats(update, context, chat_id)
         return
 
-    # Антиспам
     if data_cb.startswith("anti_spam_"):
         chat_id = int(data_cb.split("_")[2])
         await anti_spam_menu(update, context, chat_id)
@@ -1219,7 +1194,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await strict_anti_spam_menu(update, context, chat_id)
         return
 
-    # Изменение базовых параметров антиспама
     if data_cb.startswith("limit_inc_"):
         chat_id = int(data_cb.split("_")[2])
         await change_flood_parameter(update, context, "flood_limit", 1, chat_id)
@@ -1245,7 +1219,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await change_flood_parameter(update, context, "flood_mute", -30, chat_id)
         return
 
-    # Изменение строгих параметров
     if data_cb.startswith("strict_limit_inc_"):
         chat_id = int(data_cb.split("_")[3])
         await change_strict_parameter(update, context, "strict_flood_limit", 1, chat_id)
@@ -1271,7 +1244,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await change_strict_parameter(update, context, "strict_flood_mute", -60, chat_id)
         return
 
-    # CAPS
     if data_cb.startswith("caps_threshold_"):
         chat_id = int(data_cb.split("_")[2])
         await caps_threshold_menu(update, context, chat_id)
@@ -1283,7 +1255,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await set_caps_threshold(update, context, threshold, chat_id)
         return
 
-    # Переключатели
     if data_cb.startswith("toggle_links_"):
         chat_id = int(data_cb.split("_")[2])
         await toggle_setting(update, context, "block_links", chat_id)
@@ -1305,14 +1276,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await toggle_setting(update, context, "check_files", chat_id)
         return
 
-    # Приветствие
     if data_cb.startswith("set_welcome_"):
         chat_id = int(data_cb.split("_")[2])
         context.user_data["welcome_chat"] = chat_id
         await query.edit_message_text("Введите текст приветствия (или отправьте пустое сообщение для отключения):")
         return
 
-    # Оплата
     if data_cb.startswith("check_payment_"):
         invoice_id = data_cb.split("_")[2]
         await check_payment(update, context, invoice_id)
@@ -1336,7 +1305,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", start))
-    application.add_handler(CommandHandler("addgroup", addgroup))   # <-- теперь функция определена
+    application.add_handler(CommandHandler("addgroup", addgroup))
 
     application.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|groups|show_tariffs|profile|tariff_info_|buy_|admin_panel|admin_stats|admin_group_info|group_|stats_|anti_spam_|strict_anti_spam_|limit_inc_|limit_dec_|window_inc_|window_dec_|mute_inc_|mute_dec_|strict_limit_inc_|strict_limit_dec_|strict_window_inc_|strict_window_dec_|strict_mute_inc_|strict_mute_dec_|caps_threshold_|select_caps_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|set_welcome_|check_payment_|noop)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
@@ -1346,4 +1315,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
