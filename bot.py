@@ -57,6 +57,27 @@ TARIFF_FEATURES = {
     }
 }
 
+TARIFF_DESCRIPTIONS = {
+    "free": (
+        "🆓 *Бесплатный* – 0 руб.\n"
+        "• Антиспам\n"
+        "• Блокировка ссылок\n"
+        "• Блокировка инвайт-ссылок"
+    ),
+    "standard": (
+        "⭐ *Стандартный* – 99 руб.\n"
+        "• Блокировка медиа\n"
+        "• Кастомное приветствие\n"
+        "• Фильтр CAPS (настраиваемый порог)\n"
+        "• Отправка файлов на проверку"
+    ),
+    "pro": (
+        "💎 *Профессиональный* – 199 руб.\n"
+        "• Проверка контента (AI)\n"
+        "• Все функции стандартного тарифа"
+    )
+}
+
 DEFAULT_SETTINGS = {
     "flood_limit": 5,
     "flood_window": 10,
@@ -142,11 +163,19 @@ def update_group_setting(chat_id: int, key: str, value):
 def register_user(user_id: int) -> Dict:
     uid = str(user_id)
     if uid not in user_data:
-        user_data[uid] = {
-            "registered": datetime.now().isoformat(),
-            "tariff": "free",
-            "expiry": None
-        }
+        # Если это главный админ, сразу даём PRO навсегда
+        if user_id == ADMIN_ID:
+            user_data[uid] = {
+                "registered": datetime.now().isoformat(),
+                "tariff": "pro",
+                "expiry": None  # бессрочно
+            }
+        else:
+            user_data[uid] = {
+                "registered": datetime.now().isoformat(),
+                "tariff": "free",
+                "expiry": None
+            }
         save_user_data()
         logging.info(f"Зарегистрирован новый пользователь {user_id}")
     return user_data[uid]
@@ -343,9 +372,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     keyboard = [
+        [InlineKeyboardButton("👤 Профиль", callback_data="profile")],
         [InlineKeyboardButton("📋 Мои группы", callback_data="groups")],
         [InlineKeyboardButton("💰 Тарифы", callback_data="show_tariffs")],
-        [InlineKeyboardButton("👤 Профиль", callback_data="profile")],
     ]
     if user_id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton("👑 Админ панель", callback_data="admin_panel")])
@@ -359,7 +388,14 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not data["groups"]:
-        await query.edit_message_text("Нет добавленных групп.")
+        await query.edit_message_text(
+            "Нет добавленных групп.\n\n"
+            "Чтобы добавить группу:\n"
+            "1. Добавьте бота в группу и дайте ему права администратора.\n"
+            "2. Напишите любое сообщение в этой группе — бот автоматически её зарегистрирует.\n\n"
+            "Если этого не произошло, администратор группы может вручную добавить группу через админ-панель.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
+        )
         return
     keyboard = []
     for cid in data["groups"]:
@@ -540,34 +576,43 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- ТАРИФЫ ----------
 async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    text = "*Доступные тарифы:*\n\n"
+    for tariff in ["free", "standard", "pro"]:
+        text += TARIFF_DESCRIPTIONS[tariff] + "\n\n"
+    text += "⏰ *Все платные тарифы действуют 1 месяц.*\n\nДля покупки выберите тариф ниже."
+    keyboard = [
+        [InlineKeyboardButton("🆓 Бесплатный", callback_data="tariff_info_free")],
+        [InlineKeyboardButton("⭐ Стандартный (99 руб)", callback_data="tariff_info_standard")],
+        [InlineKeyboardButton("💎 Профессиональный (199 руб)", callback_data="tariff_info_pro")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+    ]
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def show_tariff_info(update: Update, context: ContextTypes.DEFAULT_TYPE, tariff: str):
+    query = update.callback_query
+    if tariff == "free":
+        await query.edit_message_text(
+            TARIFF_DESCRIPTIONS["free"] + "\n\n✅ Этот тариф уже активен по умолчанию.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]])
+        )
+        return
+    price_rub = PRICES_RUB[tariff]
+    price_usd = PRICES_USD[tariff]
     text = (
-        "*Доступные тарифы:*\n\n"
-        "🆓 *Бесплатный* – 0 руб.\n"
-        "• Антиспам\n"
-        "• Блокировка ссылок\n"
-        "• Блокировка инвайт-ссылок\n\n"
-        "⭐ *Стандартный* – 99 руб.\n"
-        "• Блокировка медиа\n"
-        "• Кастомное приветствие\n"
-        "• Фильтр CAPS\n"
-        "• Отправка файлов на проверку\n\n"
-        "💎 *Профессиональный* – 199 руб.\n"
-        "• Проверка контента (AI)\n"
-        "• Все функции стандартного тарифа\n\n"
-        "⏰ *Все тарифы действуют 1 месяц.*\n"
-        "Для покупки выберите тариф ниже."
+        TARIFF_DESCRIPTIONS[tariff] + f"\n\nСтоимость: {price_rub} руб. (≈{price_usd} USD)\n"
+        "После оплаты тариф будет активирован на 30 дней.\n\n"
+        "Выберите действие:"
     )
     keyboard = [
-        [InlineKeyboardButton("⭐ Стандартный (99 руб)", callback_data="buy_standard")],
-        [InlineKeyboardButton("💎 Профессиональный (199 руб)", callback_data="buy_pro")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+        [InlineKeyboardButton("💳 Купить", callback_data=f"buy_{tariff}")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def buy_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE, tariff: str):
     query = update.callback_query
     user_id = query.from_user.id
-    price_rub = PRICES_RUB[tariff]
     price_usd = PRICES_USD[tariff]
     description = f"Активация тарифа {tariff.upper()} на 30 дней"
     invoice = create_crypto_invoice(price_usd, description)
@@ -586,7 +631,7 @@ async def buy_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE, tariff:
     ]
     text = (
         f"💸 *Оплата тарифа {tariff.upper()}*\n"
-        f"Стоимость: {price_rub} руб. (≈{price_usd} USD)\n"
+        f"Стоимость: {PRICES_RUB[tariff]} руб. (≈{price_usd} USD)\n"
         f"Тариф будет активирован на 30 дней.\n\n"
         f"После оплаты нажмите «Проверить оплату»."
     )
@@ -842,12 +887,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data_cb == "profile":
         await show_profile(update, context)
         return
-    if data_cb == "buy_standard":
-        await buy_tariff(update, context, "standard")
+
+    # Информация о тарифе
+    if data_cb.startswith("tariff_info_"):
+        tariff = data_cb.split("_")[2]
+        await show_tariff_info(update, context, tariff)
         return
-    if data_cb == "buy_pro":
-        await buy_tariff(update, context, "pro")
+    if data_cb.startswith("buy_"):
+        tariff = data_cb.split("_")[1]
+        await buy_tariff(update, context, tariff)
         return
+
+    # Админ-панель
     if data_cb == "admin_panel":
         await admin_panel(update, context)
         return
@@ -869,7 +920,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = int(data_cb.split("_")[2])
         await anti_spam_menu(update, context, chat_id)
         return
-    # Изменение параметров антиспама
     if data_cb.startswith("limit_inc_"):
         chat_id = int(data_cb.split("_")[2])
         await change_flood_parameter(update, context, "flood_limit", 1, chat_id)
@@ -962,7 +1012,7 @@ def main():
     application.add_handler(CommandHandler("menu", menu))
 
     # Обработчики кнопок и текста
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(groups|show_tariffs|profile|buy_standard|buy_pro|admin_panel|admin_stats|admin_group_info|group_|anti_spam_|limit_inc_|limit_dec_|window_inc_|window_dec_|mute_inc_|mute_dec_|caps_threshold_|select_caps_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|set_welcome_|check_payment_|main_menu)"))
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|groups|show_tariffs|profile|tariff_info_|buy_|admin_panel|admin_stats|admin_group_info|group_|anti_spam_|limit_inc_|limit_dec_|window_inc_|window_dec_|mute_inc_|mute_dec_|caps_threshold_|select_caps_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|set_welcome_|check_payment_)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logging.info("✅ Бот запущен")
