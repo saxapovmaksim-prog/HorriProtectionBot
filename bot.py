@@ -1,6 +1,3 @@
-Мы переделаем систему: бот не пытается сам определять группы, а требует явного добавления администратором через команду `/addgroup`. При добавлении группы бот определяет владельца группы (создателя) и привязывает тариф к владельцу. Настройки групп доступны только администраторам, а доступные функции зависят от тарифа владельца группы.
-
-```python
 import asyncio
 import json
 import logging
@@ -97,8 +94,8 @@ DEFAULT_SETTINGS = {
 }
 
 # ---------- ГЛОБАЛЬНЫЕ ДАННЫЕ ----------
-data: Dict = {"groups": {}}       # группы: {chat_id: {"owner": user_id, "settings": {...}}}
-user_data: Dict = {}               # пользователи: {user_id: {tariff, expiry, registered}}
+data: Dict = {"groups": {}}
+user_data: Dict = {}
 user_messages: Dict[int, List[datetime]] = defaultdict(list)
 pending_payments: Dict[str, dict] = {}
 user_states: Dict[int, str] = {}
@@ -150,7 +147,6 @@ def save_user_data():
 def get_group_data(chat_id: int) -> Dict:
     cid = str(chat_id)
     if cid not in data["groups"]:
-        # Не добавляем автоматически, только по /addgroup
         return None
     return data["groups"][cid]
 
@@ -300,7 +296,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if chat.type in ("group", "supergroup"):
-        # Если группа не зарегистрирована, игнорируем сообщение (пользователь должен добавить через /addgroup)
+        # Если группа не зарегистрирована, игнорируем сообщение
         settings = get_group_settings(chat.id)
         if not settings:
             return
@@ -373,6 +369,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if settings.get("check_files", False) and message.document:
             await message.reply_text("📁 Файл отправлен на проверку")
             await message.delete()
+
+# ---------- НОВЫЕ УЧАСТНИКИ ----------
+async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    for member in update.message.new_chat_members:
+        if member.id == context.bot.id:
+            # Бот добавлен – даём инструкцию по добавлению группы
+            await update.message.reply_text(
+                "🤖 *Бот-защитник активирован!*\n\n"
+                "Для добавления этой группы в систему:\n"
+                "1. Назначьте бота администратором с правом «Блокировка пользователей».\n"
+                "2. В этой группе отправьте команду /addgroup (только для администраторов).\n\n"
+                "После этого вы сможете настроить защиту через /menu в личных сообщениях.",
+                parse_mode="Markdown"
+            )
+            return
+
+    # Кастомное приветствие (если настроено)
+    settings = get_group_settings(chat.id)
+    if settings and settings.get("custom_welcome"):
+        for member in update.message.new_chat_members:
+            welcome = settings["custom_welcome"] or f"Добро пожаловать, {member.full_name}!"
+            await update.message.reply_text(welcome)
 
 # ---------- ДОБАВЛЕНИЕ ГРУППЫ ----------
 async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -586,7 +605,6 @@ async def caps_threshold_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def set_caps_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE, threshold: int, chat_id: int):
     query = update.callback_query
     user_id = query.from_user.id
-    # Проверяем права администратора группы
     if not await is_group_admin(chat_id, user_id, query.message.get_bot()):
         await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
         return
@@ -1140,4 +1158,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
