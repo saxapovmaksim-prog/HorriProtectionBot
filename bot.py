@@ -25,34 +25,24 @@ CRYPTOBOT_TOKEN = "555209:AAvWWWiQt0ERfGAjTGozQDu1HEAZICFi4ZW"
 DATA_FILE = "bot_data.json"
 ADMIN_ID = 2032012311
 
-# Цены в рублях и приблизительный эквивалент в долларах
-PRICES_RUB = {
-    "standard": 99,
-    "pro": 199
-}
-PRICES_USD = {
-    "standard": 0.99,
-    "pro": 1.99
-}
+PRICES_RUB = {"standard": 99, "pro": 199}
+PRICES_USD = {"standard": 0.99, "pro": 1.99}
 
 DEFAULT_SETTINGS = {
     "tariff": "free",
     "flood_limit": 5,
     "flood_window": 10,
     "flood_mute": 60,
-    "block_links": True,               # блокировка обычных ссылок
-    "block_media": True,               # блокировка медиа
-    "block_bad_words": False,          # блокировка запрещённых слов
-    "custom_welcome": None,            # кастомное приветствие
-    "check_links": True,               # отправка ссылок на проверку
-    "check_files": False,              # отправка файлов на проверку
-    "check_content": False,            # проверка контента (pro)
-    "invite_links_block": True,        # блокировка инвайт-ссылок (добавлено)
-    "caps_filter": True,               # фильтр по CAPS (добавлено)
-    "stats": {
-        "messages": 0,
-        "violations": 0
-    }
+    "block_links": True,
+    "block_media": True,
+    "block_bad_words": False,
+    "custom_welcome": None,
+    "check_links": True,
+    "check_files": False,
+    "check_content": False,
+    "invite_links_block": True,
+    "caps_filter": True,
+    "stats": {"messages": 0, "violations": 0}
 }
 
 TARIFF_FEATURES = {
@@ -95,9 +85,8 @@ TARIFF_FEATURES = {
 data: Dict = {"groups": {}, "admins": [ADMIN_ID]}
 user_messages: Dict[int, List[datetime]] = defaultdict(list)
 pending_payments: Dict[str, dict] = {}
-bad_words: Set[str] = set()  # для будущей реализации
 
-# ---------- ЗАГРУЗКА / СОХРАНЕНИЕ ДАННЫХ ----------
+# ---------- ЗАГРУЗКА / СОХРАНЕНИЕ ----------
 def load_data():
     global data
     if os.path.exists(DATA_FILE):
@@ -137,26 +126,48 @@ def update_group_setting(chat_id: int, key: str, value):
     settings[key] = value
     set_group_settings(chat_id, settings)
 
-# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ПРОВЕРОК ----------
+def delete_group(chat_id: int):
+    """Удаляет группу из базы данных."""
+    chat_id_str = str(chat_id)
+    if chat_id_str in data["groups"]:
+        del data["groups"][chat_id_str]
+        save_data()
+        return True
+    return False
+
+def clean_invalid_groups(context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет группы, которые больше не существуют или бот из них вышел."""
+    to_delete = []
+    for chat_id_str in list(data["groups"].keys()):
+        try:
+            chat_id = int(chat_id_str)
+            context.bot.get_chat(chat_id)  # если чат не существует, вызовет ошибку
+            # Проверяем, что бот всё ещё участник
+            bot_member = context.bot.get_chat_member(chat_id, context.bot.id)
+            if bot_member.status not in ("administrator", "member"):
+                to_delete.append(chat_id_str)
+        except:
+            to_delete.append(chat_id_str)
+    for chat_id_str in to_delete:
+        del data["groups"][chat_id_str]
+    if to_delete:
+        save_data()
+        logging.info(f"Удалено неактивных групп: {to_delete}")
+
+# ---------- ПРОВЕРКИ ----------
 def contains_link(text: str) -> bool:
-    url_pattern = re.compile(r'(https?://|www\.)\S+', re.IGNORECASE)
-    return bool(url_pattern.search(text))
+    return bool(re.search(r'(https?://|www\.)\S+', text, re.IGNORECASE))
 
 def contains_invite_link(text: str) -> bool:
-    """Проверяет наличие инвайт-ссылок Telegram."""
     patterns = [
         r'(?:https?://)?t\.me/joinchat/\S+',
         r'(?:https?://)?t\.me/\+[\w-]+',
         r'(?:https?://)?t\.me/c/\d+/\d+',
         r'(?:https?://)?t\.me/join\b'
     ]
-    for pattern in patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            return True
-    return False
+    return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
 def is_caps_abuse(text: str, threshold: float = 0.7) -> bool:
-    """Проверяет, состоит ли сообщение из более чем threshold заглавных букв."""
     letters = [c for c in text if c.isalpha()]
     if not letters:
         return False
@@ -176,19 +187,16 @@ def is_flooding(user_id: int, chat_id: int) -> bool:
     return len(timestamps) > limit
 
 async def is_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Проверяет, является ли пользователь администратором чата."""
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         return member.status in ("administrator", "creator")
-    except Exception as e:
-        logging.error(f"Ошибка проверки админа: {e}")
+    except:
         return False
 
 async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.restrict_chat_member(
-            chat_id,
-            user_id,
+            chat_id, user_id,
             permissions=ChatPermissions(can_send_messages=False),
             until_date=datetime.now() + timedelta(seconds=duration)
         )
@@ -202,7 +210,7 @@ async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, 
     except Exception as e:
         logging.error(f"Не удалось ограничить пользователя {user_id} в чате {chat_id}: {e}")
 
-# ---------- ОБРАБОТЧИК СООБЩЕНИЙ (ЗАЩИТА) ----------
+# ---------- ЗАЩИТА СООБЩЕНИЙ ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_chat or not update.effective_user:
         return
@@ -213,13 +221,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot:
         return
 
-    # Проверяем, не является ли пользователь администратором
     if await is_admin(chat.id, user.id, context):
-        return  # Игнорируем сообщения администраторов
+        return
 
     settings = get_group_settings(chat.id)
-
-    # Обновляем статистику сообщений
     settings["stats"]["messages"] += 1
     set_group_settings(chat.id, settings)
 
@@ -250,7 +255,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # Блокировка инвайт-ссылок
+    # Инвайт-ссылки
     if settings.get("invite_links_block", True) and message.text and contains_invite_link(message.text):
         await restrict_user(chat.id, user.id, 60, "Запрещённые инвайт-ссылки", context)
         try:
@@ -259,7 +264,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # Фильтр CAPS
+    # CAPS
     if settings.get("caps_filter", True) and message.text and is_caps_abuse(message.text):
         await restrict_user(chat.id, user.id, 60, "Злоупотребление заглавными буквами", context)
         try:
@@ -268,20 +273,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # Блокировка медиа
-    if settings.get("block_media", True):
-        if any((message.photo, message.video, message.document, message.voice,
-                message.audio, message.animation, message.sticker)):
-            await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
-            try:
-                await message.delete()
-            except:
-                pass
-            return
+    # Медиа
+    if settings.get("block_media", True) and any((message.photo, message.video, message.document,
+                                                  message.voice, message.audio, message.animation, message.sticker)):
+        await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
+        try:
+            await message.delete()
+        except:
+            pass
+        return
 
-    # Блокировка запрещённых слов (заглушка)
+    # Запрещённые слова (заглушка)
     if settings.get("block_bad_words", False) and message.text:
-        # TODO: реализовать проверку слов
+        # TODO: проверка по списку слов
         pass
 
     # Проверка ссылок/файлов (заглушки)
@@ -312,7 +316,7 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
             else:
                 await update.message.reply_text(f"Добро пожаловать, {member.full_name}!")
 
-# ---------- КОМАНДЫ В ЛИЧНЫХ СООБЩЕНИЯХ ----------
+# ---------- МЕНЮ ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я бот-защитник чатов.\n"
@@ -323,6 +327,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     groups = data["groups"]
+    # Очищаем невалидные группы перед показом
+    clean_invalid_groups(context)
+
     if not groups:
         await update.message.reply_text("Вы ещё не добавили меня ни в одну группу.\nДобавьте бота в группу и назначьте администратором.")
         return
@@ -331,10 +338,18 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for chat_id_str, settings in groups.items():
         try:
             chat = await context.bot.get_chat(int(chat_id_str))
+            # Показываем только супергруппы/группы, игнорируем личные чаты
+            if chat.type not in ("group", "supergroup"):
+                continue
             title = chat.title or f"Группа {chat_id_str}"
         except:
-            title = f"Группа {chat_id_str}"
+            continue
         keyboard.append([InlineKeyboardButton(title, callback_data=f"group_{chat_id_str}")])
+
+    if not keyboard:
+        await update.message.reply_text("Нет доступных групп. Убедитесь, что бот добавлен в группу и является администратором.")
+        return
+
     if user_id in data.get("admins", []):
         keyboard.append([InlineKeyboardButton("🔧 Админ панель", callback_data="admin_panel")])
     keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
@@ -344,7 +359,6 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def show_group_menu(query, chat_id_int: int):
-    """Отображает меню настройки группы с учётом всех модулей."""
     settings = get_group_settings(chat_id_int)
     tariff = settings["tariff"]
     text = (
@@ -374,7 +388,6 @@ async def show_group_menu(query, chat_id_int: int):
     await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_tariff_choice(query, chat_id: int):
-    """Показывает кнопки выбора тарифа для группы."""
     buttons = []
     for tariff in ["free", "standard", "pro"]:
         price = PRICES_RUB.get(tariff, 0)
@@ -383,8 +396,68 @@ async def show_tariff_choice(query, chat_id: int):
     buttons.append([InlineKeyboardButton("Назад", callback_data=f"group_{chat_id}")])
     await query.edit_message_text("Выберите тариф:", reply_markup=InlineKeyboardMarkup(buttons))
 
+# ---------- ОПЛАТА ----------
+def create_crypto_invoice(amount_usd: float, description: str) -> Optional[Dict]:
+    url = "https://pay.crypt.bot/api/createInvoice"
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN, "Content-Type": "application/json"}
+    payload = {
+        "asset": "USDT",
+        "amount": amount_usd,
+        "description": description,
+        "paid_btn_name": "callback",
+        "paid_btn_url": "https://t.me/YourBotUsername"  # замените на имя бота
+    }
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("ok"):
+            return result["result"]
+    except Exception as e:
+        logging.error(f"CryptoBot error: {e}")
+    return None
+
+def check_invoice_status(invoice_id: str) -> Optional[str]:
+    url = "https://pay.crypt.bot/api/getInvoices"
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
+    params = {"invoice_ids": invoice_id}
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("ok") and result["result"]["items"]:
+            invoice = result["result"]["items"][0]
+            if invoice["status"] == "paid":
+                return "paid"
+    except Exception as e:
+        logging.error(f"Ошибка проверки счёта: {e}")
+    return None
+
+async def start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, tariff: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    price_usd = PRICES_USD[tariff]
+    description = f"Активация тарифа {tariff.upper()} для группы {chat_id}"
+    invoice = create_crypto_invoice(price_usd, description)
+    if not invoice:
+        await query.edit_message_text("❌ Ошибка создания счёта. Попробуйте позже.")
+        return
+    invoice_id = str(invoice["invoice_id"])
+    pending_payments[invoice_id] = {"user_id": user_id, "chat_id": chat_id, "tariff": tariff}
+    keyboard = [
+        [InlineKeyboardButton("💳 Оплатить", url=invoice["pay_url"])],
+        [InlineKeyboardButton("✅ Проверить оплату", callback_data=f"check_payment_{invoice_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data=f"cancel_payment_{chat_id}")]
+    ]
+    text = (
+        f"💸 *Оплата тарифа {tariff.upper()}*\n"
+        f"Стоимость: {PRICES_RUB[tariff]} руб. (≈{price_usd} USD)\n"
+        f"Группа: {chat_id}\n\n"
+        f"После оплаты нажмите «Проверить оплату»."
+    )
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+
 async def select_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE, tariff: str, chat_id: int):
-    """Обрабатывает выбор тарифа."""
     query = update.callback_query
     await query.answer()
     if tariff == "free":
@@ -399,107 +472,27 @@ async def select_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE, tari
     else:
         await start_payment(update, context, chat_id, tariff)
 
-async def start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, tariff: str):
-    user_id = update.effective_user.id
-    price_rub = PRICES_RUB[tariff]
-    price_usd = PRICES_USD[tariff]
-    description = f"Активация тарифа {tariff.upper()} для группы {chat_id}"
-    invoice = create_crypto_invoice(price_usd, description)
-    if not invoice:
-        await update.callback_query.edit_message_text("❌ Ошибка создания счёта. Попробуйте позже.")
-        return
-    invoice_id = str(invoice["invoice_id"])
-    pending_payments[invoice_id] = {
-        "user_id": user_id,
-        "chat_id": chat_id,
-        "tariff": tariff
-    }
-    keyboard = [
-        [InlineKeyboardButton("💳 Оплатить", url=invoice["pay_url"])],
-        [InlineKeyboardButton("✅ Проверить оплату", callback_data=f"check_payment_{invoice_id}")],
-        [InlineKeyboardButton("❌ Отмена", callback_data=f"cancel_payment_{chat_id}")]
-    ]
-    text = (
-        f"💸 *Оплата тарифа {tariff.upper()}*\n"
-        f"Стоимость: {price_rub} руб. (≈{price_usd} USD)\n"
-        f"Группа: {chat_id}\n\n"
-        f"После оплаты нажмите «Проверить оплату»."
-    )
-    await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
-
-def create_crypto_invoice(amount_usd: float, description: str) -> Optional[Dict]:
-    url = "https://pay.crypt.bot/api/createInvoice"
-    headers = {
-        "Crypto-Pay-API-Token": CRYPTOBOT_TOKEN,
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "asset": "USDT",
-        "amount": amount_usd,
-        "description": description,
-        "paid_btn_name": "callback",
-        "paid_btn_url": "https://t.me/YourBotUsername"  # замените на username бота
-    }
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        result = response.json()
-        if result.get("ok"):
-            return result["result"]
-        else:
-            logging.error(f"CryptoBot error: {result}")
-            return None
-    except Exception as e:
-        logging.error(f"Ошибка создания счёта: {e}")
-        return None
-
-def check_invoice_status(invoice_id: str) -> Optional[str]:
-    url = "https://pay.crypt.bot/api/getInvoices"
-    headers = {
-        "Crypto-Pay-API-Token": CRYPTOBOT_TOKEN,
-        "Content-Type": "application/json"
-    }
-    params = {"invoice_ids": invoice_id}
-    try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        result = response.json()
-        if result.get("ok") and result["result"]["items"]:
-            invoice = result["result"]["items"][0]
-            if invoice["status"] == "paid":
-                return "paid"
-        return None
-    except Exception as e:
-        logging.error(f"Ошибка проверки счёта: {e}")
-        return None
-
 async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, invoice_id: str):
     query = update.callback_query
     await query.answer()
     if invoice_id not in pending_payments:
         await query.edit_message_text("❌ Запрос на оплату не найден или устарел.")
         return
-    payment_info = pending_payments[invoice_id]
+    info = pending_payments[invoice_id]
     status = check_invoice_status(invoice_id)
     if status == "paid":
-        chat_id = payment_info["chat_id"]
-        tariff = payment_info["tariff"]
+        chat_id = info["chat_id"]
+        tariff = info["tariff"]
         settings = get_group_settings(chat_id)
         settings["tariff"] = tariff
         for key, value in TARIFF_FEATURES[tariff].items():
             settings[key] = value
         set_group_settings(chat_id, settings)
         del pending_payments[invoice_id]
-        await query.edit_message_text(
-            f"✅ *Оплата подтверждена!*\nТариф {tariff.upper()} активирован для группы {chat_id}.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await query.edit_message_text(f"✅ *Оплата подтверждена!*\nТариф {tariff.upper()} активирован для группы {chat_id}.", parse_mode=ParseMode.MARKDOWN)
         await show_group_menu(query, chat_id)
     else:
-        await query.edit_message_text(
-            "⏳ Оплата не обнаружена. Убедитесь, что вы завершили платёж, и нажмите снова.\n"
-            "Если проблема не решается, свяжитесь с поддержкой."
-        )
+        await query.edit_message_text("⏳ Оплата не обнаружена. Убедитесь, что вы завершили платёж, и нажмите снова.")
 
 async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     query = update.callback_query
@@ -509,44 +502,182 @@ async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, cha
         del pending_payments[inv]
     await show_tariff_choice(query, chat_id)
 
-# ---------- ОСТАЛЬНЫЕ КНОПКИ ----------
+# ---------- АДМИН-ПАНЕЛЬ ----------
+async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    if user_id not in data.get("admins", []):
+        await query.edit_message_text("⛔ У вас нет доступа к админ-панели.")
+        return
+    text = "🔧 *Админ-панель*\n\n"
+    text += f"Всего групп: {len(data['groups'])}\n"
+    text += f"Администраторов бота: {len(data['admins'])}"
+    keyboard = [
+        [InlineKeyboardButton("Список групп", callback_data="admin_groups")],
+        [InlineKeyboardButton("Управление админами", callback_data="admin_admins")],
+        [InlineKeyboardButton("Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")],
+    ]
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def admin_groups_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    groups = data["groups"]
+    if not groups:
+        await query.edit_message_text("Нет групп.")
+        return
+
+    clean_invalid_groups(context)  # удаляем несуществующие
+    groups = data["groups"]
+    if not groups:
+        await query.edit_message_text("После очистки групп не осталось.")
+        return
+
+    keyboard = []
+    for chat_id_str, settings in groups.items():
+        try:
+            chat = await context.bot.get_chat(int(chat_id_str))
+            title = chat.title or f"Группа {chat_id_str}"
+        except:
+            continue
+        # Кнопка: название группы и рядом кнопка удаления
+        keyboard.append([
+            InlineKeyboardButton(f"{title}", callback_data=f"group_{chat_id_str}"),
+            InlineKeyboardButton("❌ Удалить", callback_data=f"delete_group_{chat_id_str}")
+        ])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")])
+    await query.edit_message_text(
+        "Выберите группу для настройки или удаления:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def delete_group_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id_str: str):
+    query = update.callback_query
+    chat_id = int(chat_id_str)
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_{chat_id_str}"),
+            InlineKeyboardButton("❌ Отмена", callback_data="admin_groups")
+        ]
+    ]
+    await query.edit_message_text(
+        f"⚠️ Вы уверены, что хотите удалить группу {chat_id} из базы бота?\n"
+        "Это действие не удаляет группу в Telegram, только настройки бота.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def confirm_delete_group(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id_str: str):
+    query = update.callback_query
+    chat_id = int(chat_id_str)
+    if delete_group(chat_id):
+        await query.edit_message_text(f"✅ Группа {chat_id} удалена из настроек бота.")
+    else:
+        await query.edit_message_text("❌ Группа не найдена.")
+    await asyncio.sleep(1)
+    await admin_groups_list(update, context)
+
+async def admin_admins_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    admins = data["admins"]
+    text = "*Администраторы бота:*\n"
+    for aid in admins:
+        text += f"- {aid}\n"
+    text += "\nДля добавления введите /addadmin <id>\nДля удаления /deladmin <id>"
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    total_messages = sum(s["stats"]["messages"] for s in data["groups"].values())
+    total_violations = sum(s["stats"]["violations"] for s in data["groups"].values())
+    text = f"*Общая статистика*\nСообщений: {total_messages}\nНарушений: {total_violations}"
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+
+# ---------- КОМАНДЫ АДМИНОВ ----------
+async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Только главный админ может добавлять администраторов.")
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /addadmin <user_id>")
+        return
+    try:
+        new_admin = int(context.args[0])
+        if new_admin not in data["admins"]:
+            data["admins"].append(new_admin)
+            save_data()
+            await update.message.reply_text(f"✅ Пользователь {new_admin} добавлен как администратор.")
+        else:
+            await update.message.reply_text("Уже администратор.")
+    except:
+        await update.message.reply_text("Ошибка: ID должен быть числом.")
+
+async def del_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Только главный админ может удалять администраторов.")
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /deladmin <user_id>")
+        return
+    try:
+        admin_to_del = int(context.args[0])
+        if admin_to_del in data["admins"] and admin_to_del != ADMIN_ID:
+            data["admins"].remove(admin_to_del)
+            save_data()
+            await update.message.reply_text(f"✅ Пользователь {admin_to_del} удалён из администраторов.")
+        else:
+            await update.message.reply_text("Нельзя удалить главного админа или пользователь не администратор.")
+    except:
+        await update.message.reply_text("Ошибка.")
+
+# ---------- ОБРАБОТЧИКИ КНОПОК ----------
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data_cb = query.data
 
+    # Общие
     if data_cb == "close":
         await query.edit_message_text("Меню закрыто.")
         return
     if data_cb == "back_to_groups":
-        groups = data["groups"]
-        if not groups:
-            await query.edit_message_text("Нет доступных групп.")
-            return
-        keyboard = []
-        for chat_id_str, settings in groups.items():
-            try:
-                chat = await context.bot.get_chat(int(chat_id_str))
-                title = chat.title or f"Группа {chat_id_str}"
-            except:
-                title = f"Группа {chat_id_str}"
-            keyboard.append([InlineKeyboardButton(title, callback_data=f"group_{chat_id_str}")])
-        keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
-        await query.edit_message_text("Выберите группу:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await menu(update, context)  # перезапускаем меню
         return
     if data_cb == "admin_panel":
         await admin_panel_callback(update, context)
         return
+    if data_cb == "admin_groups":
+        await admin_groups_list(update, context)
+        return
+    if data_cb == "admin_admins":
+        await admin_admins_menu(update, context)
+        return
+    if data_cb == "admin_stats":
+        await admin_stats(update, context)
+        return
+    if data_cb == "close_admin":
+        await query.edit_message_text("Админ-панель закрыта.")
+        return
 
+    # Удаление группы
+    if data_cb.startswith("delete_group_"):
+        chat_id_str = data_cb.split("_")[2]
+        await delete_group_confirm(update, context, chat_id_str)
+        return
+    if data_cb.startswith("confirm_delete_"):
+        chat_id_str = data_cb.split("_")[2]
+        await confirm_delete_group(update, context, chat_id_str)
+        return
+
+    # Группа из списка
     if data_cb.startswith("group_"):
         chat_id = int(data_cb.split("_")[1])
         await show_group_menu(query, chat_id)
         return
 
+    # Выбор тарифа
     if data_cb.startswith("choose_tariff_"):
         chat_id = int(data_cb.split("_")[2])
         await show_tariff_choice(query, chat_id)
         return
-
     if data_cb.startswith("select_tariff_"):
         parts = data_cb.split("_")
         tariff = parts[2]
@@ -554,54 +685,48 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await select_tariff(update, context, tariff, chat_id)
         return
 
+    # Проверка/отмена оплаты
     if data_cb.startswith("check_payment_"):
         invoice_id = data_cb.split("_")[2]
         await check_payment(update, context, invoice_id)
         return
-
     if data_cb.startswith("cancel_payment_"):
         chat_id = int(data_cb.split("_")[2])
         await cancel_payment(update, context, chat_id)
         return
 
+    # Переключения
     if data_cb.startswith("toggle_links_"):
         chat_id = int(data_cb.split("_")[2])
         settings = get_group_settings(chat_id)
-        new_val = not settings["block_links"]
-        update_group_setting(chat_id, "block_links", new_val)
+        update_group_setting(chat_id, "block_links", not settings["block_links"])
         await show_group_menu(query, chat_id)
         return
-
     if data_cb.startswith("toggle_invite_"):
         chat_id = int(data_cb.split("_")[2])
         settings = get_group_settings(chat_id)
-        new_val = not settings["invite_links_block"]
-        update_group_setting(chat_id, "invite_links_block", new_val)
+        update_group_setting(chat_id, "invite_links_block", not settings["invite_links_block"])
         await show_group_menu(query, chat_id)
         return
-
     if data_cb.startswith("toggle_caps_"):
         chat_id = int(data_cb.split("_")[2])
         settings = get_group_settings(chat_id)
-        new_val = not settings["caps_filter"]
-        update_group_setting(chat_id, "caps_filter", new_val)
+        update_group_setting(chat_id, "caps_filter", not settings["caps_filter"])
         await show_group_menu(query, chat_id)
         return
-
     if data_cb.startswith("toggle_media_"):
         chat_id = int(data_cb.split("_")[2])
         settings = get_group_settings(chat_id)
-        new_val = not settings["block_media"]
-        update_group_setting(chat_id, "block_media", new_val)
+        update_group_setting(chat_id, "block_media", not settings["block_media"])
         await show_group_menu(query, chat_id)
         return
 
+    # Настройка антиспама / приветствия
     if data_cb.startswith("set_welcome_"):
         chat_id = int(data_cb.split("_")[2])
         context.user_data["welcome_chat"] = chat_id
         await query.edit_message_text("Введите текст приветствия (или отправьте пустое сообщение для отключения):")
         return
-
     if data_cb.startswith("configure_flood_"):
         chat_id = int(data_cb.split("_")[2])
         context.user_data["flood_chat"] = chat_id
@@ -615,9 +740,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    """Обработка ввода приветствия и антиспама."""
     message = update.message
-
     if "welcome_chat" in context.user_data:
         chat_id = context.user_data.pop("welcome_chat")
         text = message.text.strip()
@@ -641,9 +765,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = text.split()
             if len(parts) != 3:
                 raise ValueError
-            limit = int(parts[0])
-            window = int(parts[1])
-            mute = int(parts[2])
+            limit, window, mute = map(int, parts)
             if limit <= 0 or window <= 0 or mute <= 0:
                 raise ValueError
             update_group_setting(chat_id, "flood_limit", limit)
@@ -657,7 +779,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def show_group_menu_from_user(update: Update, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает меню группы в ответ на сообщение (для имитации callback)."""
+    """Показывает меню группы как обычное сообщение."""
     settings = get_group_settings(chat_id)
     tariff = settings["tariff"]
     text = (
@@ -686,113 +808,14 @@ async def show_group_menu_from_user(update: Update, chat_id: int, context: Conte
     ]
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- АДМИН-ПАНЕЛЬ (кнопка) ----------
-async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = update.effective_user.id
-    if user_id not in data.get("admins", []):
-        await query.edit_message_text("⛔ У вас нет доступа к админ-панели.")
-        return
-    text = "🔧 *Админ-панель*\n\n"
-    text += f"Всего групп: {len(data['groups'])}\n"
-    text += f"Администраторов бота: {len(data['admins'])}"
-    keyboard = [
-        [InlineKeyboardButton("Список групп", callback_data="admin_groups")],
-        [InlineKeyboardButton("Управление админами", callback_data="admin_admins")],
-        [InlineKeyboardButton("Статистика", callback_data="admin_stats")],
-        [InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")],
-    ]
-    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = update.effective_user.id
-    if user_id not in data.get("admins", []):
-        await query.edit_message_text("⛔ Доступ запрещён.")
-        return
-
-    if query.data == "close_admin":
-        await query.edit_message_text("Админ-панель закрыта.")
-        return
-
-    if query.data == "admin_groups":
-        groups = data["groups"]
-        if not groups:
-            await query.edit_message_text("Нет групп.")
-            return
-        text = "*Список групп:*\n"
-        for chat_id_str, s in groups.items():
-            try:
-                chat = await context.bot.get_chat(int(chat_id_str))
-                title = chat.title or "Без названия"
-            except:
-                title = "Недоступно"
-            text += f"{title} (ID: {chat_id_str}) – тариф {s['tariff']}\n"
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-        return
-
-    if query.data == "admin_admins":
-        admins = data["admins"]
-        text = "*Администраторы бота:*\n"
-        for aid in admins:
-            text += f"- {aid}\n"
-        text += "\nДля добавления введите /addadmin <id>\nДля удаления /deladmin <id>"
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-        return
-
-    if query.data == "admin_stats":
-        total_messages = sum(s["stats"]["messages"] for s in data["groups"].values())
-        total_violations = sum(s["stats"]["violations"] for s in data["groups"].values())
-        text = f"*Общая статистика*\nСообщений: {total_messages}\nНарушений: {total_violations}"
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-        return
-
-async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("⛔ Только главный админ может добавлять администраторов.")
-        return
-    if not context.args:
-        await update.message.reply_text("Использование: /addadmin <user_id>")
-        return
-    try:
-        new_admin = int(context.args[0])
-        if new_admin not in data["admins"]:
-            data["admins"].append(new_admin)
-            save_data()
-            await update.message.reply_text(f"✅ Пользователь {new_admin} добавлен как администратор.")
-        else:
-            await update.message.reply_text("Уже администратор.")
-    except:
-        await update.message.reply_text("Ошибка: ID должен быть числом.")
-
-async def del_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("⛔ Только главный админ может удалять администраторов.")
-        return
-    if not context.args:
-        await update.message.reply_text("Использование: /deladmin <user_id>")
-        return
-    try:
-        admin_to_del = int(context.args[0])
-        if admin_to_del in data["admins"] and admin_to_del != ADMIN_ID:
-            data["admins"].remove(admin_to_del)
-            save_data()
-            await update.message.reply_text(f"✅ Пользователь {admin_to_del} удалён из администраторов.")
-        else:
-            await update.message.reply_text("Нельзя удалить главного админа или пользователь не администратор.")
-    except:
-        await update.message.reply_text("Ошибка.")
-
-# ---------- ЗАПУСК БОТА ----------
+# ---------- ЗАПУСК ----------
 def main():
     logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
     load_data()
 
     application = Application.builder().token(TOKEN).build()
 
-    # Обработчики сообщений (защита)
+    # Защита
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_message))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_chat_members))
@@ -803,9 +826,8 @@ def main():
     application.add_handler(CommandHandler("addadmin", add_admin))
     application.add_handler(CommandHandler("deladmin", del_admin))
 
-    # Кнопки и текстовые диалоги
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|choose_tariff_|select_tariff_|check_payment_|cancel_payment_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|set_welcome_|configure_flood_|back_to_groups|close|admin_panel)"))
-    application.add_handler(CallbackQueryHandler(admin_callback, pattern="^(admin_groups|admin_admins|admin_stats|close_admin)"))
+    # Callback'и
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|choose_tariff_|select_tariff_|check_payment_|cancel_payment_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|set_welcome_|configure_flood_|back_to_groups|close|admin_panel|admin_groups|admin_admins|admin_stats|close_admin|delete_group_|confirm_delete_)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     application.run_polling()
