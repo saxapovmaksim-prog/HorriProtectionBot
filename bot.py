@@ -1,3 +1,4 @@
+```python
 import asyncio
 import json
 import logging
@@ -67,6 +68,7 @@ DEFAULT_SETTINGS = {
     "check_files": False,
     "check_content": False,
     "caps_filter": False,
+    "caps_threshold": 70,                # % заглавных букв для срабатывания
     "invite_links_block": True,
     "stats": {"messages": 0, "violations": 0}
 }
@@ -186,12 +188,12 @@ def contains_invite_link(text: str) -> bool:
     ]
     return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
-def is_caps_abuse(text: str, threshold: float = 0.7) -> bool:
+def is_caps_abuse(text: str, threshold: int = 70) -> bool:
     letters = [c for c in text if c.isalpha()]
     if not letters:
         return False
     uppercase = sum(1 for c in letters if c.isupper())
-    return (uppercase / len(letters)) > threshold
+    return (uppercase / len(letters)) * 100 > threshold
 
 def is_flooding(user_id: int, chat_id: int) -> bool:
     settings = get_group_settings(chat_id)
@@ -237,15 +239,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.effective_message
 
-    # Логируем полученное сообщение
-    logging.info(f"Получено сообщение от {user.id} в чате {chat.id} (тип {chat.type})")
-
     if user.is_bot:
         return
 
     # Если это группа, применяем защиту
     if chat.type in ("group", "supergroup"):
-        # Убеждаемся, что настройки есть
         settings = get_group_settings(chat.id)
 
         # Статистика
@@ -273,7 +271,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Блокировка обычных ссылок
+        # Блокировка ссылок
         if settings.get("block_links", True) and message.text and contains_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
             try:
@@ -282,7 +280,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Блокировка инвайт-ссылок
+        # Инвайт-ссылки
         if settings.get("invite_links_block", True) and message.text and contains_invite_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые инвайт-ссылки", context)
             try:
@@ -291,16 +289,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # CAPS (если включено)
-        if settings.get("caps_filter", False) and message.text and is_caps_abuse(message.text):
-            await restrict_user(chat.id, user.id, 60, "Злоупотребление заглавными буквами", context)
-            try:
-                await message.delete()
-            except:
-                pass
-            return
+        # CAPS (с учётом порога)
+        if settings.get("caps_filter", False) and message.text:
+            threshold = settings.get("caps_threshold", 70)
+            if is_caps_abuse(message.text, threshold):
+                await restrict_user(chat.id, user.id, 1800, f"CAPS (> {threshold}%)", context)  # 30 минут = 1800 сек
+                try:
+                    await message.delete()
+                except:
+                    pass
+                return
 
-        # Блокировка медиа (если включено)
+        # Блокировка медиа
         if settings.get("block_media", False) and any((message.photo, message.video, message.document,
                                                        message.voice, message.audio, message.animation, message.sticker)):
             await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
@@ -314,7 +314,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if settings.get("check_files", False) and message.document:
             await message.reply_text("📁 Файл отправлен на проверку")
             await message.delete()
-    # Для личных сообщений ничего не делаем, они будут обработаны handle_text
 
 # ---------- НОВЫЕ УЧАСТНИКИ ----------
 async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -347,6 +346,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📋 Мои группы", callback_data="groups")],
         [InlineKeyboardButton("💰 Тарифы", callback_data="show_tariffs")],
+        [InlineKeyboardButton("👤 Профиль", callback_data="profile")],
     ]
     if user_id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton("👑 Админ панель", callback_data="admin_panel")])
@@ -386,7 +386,8 @@ async def show_group_settings(query, chat_id: int):
     text = (
         f"*Группа:* `{chat_id}`\n"
         f"*Ваш тариф:* {user_tariff.upper()}\n"
-        f"*Антиспам:* {settings['flood_limit']} сообщ. за {settings['flood_window']} сек\n"
+        f"*Антиспам:* {settings['flood_limit']} сообщ. за {settings['flood_window']} сек → мут {settings['flood_mute']} сек\n"
+        f"*CAPS порог:* {settings.get('caps_threshold', 70)}% (мут 30 мин)\n"
         f"*Блокировка ссылок:* {'✅' if settings['block_links'] else '❌'}\n"
         f"*Блокировка инвайт-ссылок:* {'✅' if settings['invite_links_block'] else '❌'}\n"
         f"*Фильтр CAPS:* {'✅' if settings['caps_filter'] else '❌'}\n"
@@ -396,14 +397,19 @@ async def show_group_settings(query, chat_id: int):
         f"*Статистика:* сообщений {settings['stats']['messages']}, нарушений {settings['stats']['violations']}"
     )
     keyboard = []
-    keyboard.append([InlineKeyboardButton("⚙️ Настроить антиспам", callback_data=f"configure_flood_{chat_id}")])
 
+    # Настройки антиспама
+    keyboard.append([InlineKeyboardButton("⚙️ Антиспам", callback_data=f"anti_spam_{chat_id}")])
+    # Настройки CAPS
+    if allowed_features["caps_filter"]:
+        keyboard.append([InlineKeyboardButton("🔠 CAPS порог", callback_data=f"caps_threshold_{chat_id}")])
+        keyboard.append([InlineKeyboardButton("🔠 CAPS: Вкл/Выкл", callback_data=f"toggle_caps_{chat_id}")])
+
+    # Другие переключатели
     if allowed_features["block_links"]:
         keyboard.append([InlineKeyboardButton("🔗 Ссылки: Вкл/Выкл", callback_data=f"toggle_links_{chat_id}")])
     if allowed_features["invite_links_block"]:
         keyboard.append([InlineKeyboardButton("🚫 Инвайт-ссылки: Вкл/Выкл", callback_data=f"toggle_invite_{chat_id}")])
-    if allowed_features["caps_filter"]:
-        keyboard.append([InlineKeyboardButton("🔠 CAPS фильтр: Вкл/Выкл", callback_data=f"toggle_caps_{chat_id}")])
     if allowed_features["block_media"]:
         keyboard.append([InlineKeyboardButton("📷 Медиа: Вкл/Выкл", callback_data=f"toggle_media_{chat_id}")])
     if allowed_features["custom_welcome"]:
@@ -422,7 +428,56 @@ async def show_group_settings(query, chat_id: int):
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="groups")])
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- НАСТРОЙКИ ГРУППЫ ----------
+# ---------- НАСТРОЙКИ АНТИСПАМА ----------
+async def anti_spam_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    query = update.callback_query
+    settings = get_group_settings(chat_id)
+    text = (
+        f"*Настройка антиспама*\n"
+        f"Лимит: {settings['flood_limit']} сообщений\n"
+        f"Окно: {settings['flood_window']} сек\n"
+        f"Длительность мута: {settings['flood_mute']} сек\n\n"
+        f"Используйте кнопки для изменения."
+    )
+    keyboard = [
+        [InlineKeyboardButton("📈 +1", callback_data=f"limit_inc_{chat_id}"),
+         InlineKeyboardButton("📉 -1", callback_data=f"limit_dec_{chat_id}")],
+        [InlineKeyboardButton("⏱ +5 сек", callback_data=f"window_inc_{chat_id}"),
+         InlineKeyboardButton("⏱ -5 сек", callback_data=f"window_dec_{chat_id}")],
+        [InlineKeyboardButton("🔇 +30 сек мута", callback_data=f"mute_inc_{chat_id}"),
+         InlineKeyboardButton("🔊 -30 сек мута", callback_data=f"mute_dec_{chat_id}")],
+        [InlineKeyboardButton("🔙 Назад", callback_data=f"group_{chat_id}")]
+    ]
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ---------- НАСТРОЙКИ CAPS ----------
+async def caps_threshold_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    query = update.callback_query
+    current = get_group_settings(chat_id).get("caps_threshold", 70)
+    text = f"*Настройка порога CAPS*\nТекущий порог: {current}%\n\nВыберите новый порог:"
+    thresholds = [10, 30, 50, 70, 100]
+    keyboard = []
+    for t in thresholds:
+        keyboard.append([InlineKeyboardButton(f"{t}%", callback_data=f"select_caps_{t}_{chat_id}")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"group_{chat_id}")])
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def set_caps_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE, threshold: int, chat_id: int):
+    query = update.callback_query
+    user_id = query.from_user.id
+    if not await is_group_admin(chat_id, user_id, query.message.get_bot()):
+        await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
+        return
+    user_tariff = get_user_tariff(user_id)
+    if not TARIFF_FEATURES[user_tariff]["caps_filter"]:
+        await query.answer("❌ Функция CAPS недоступна на вашем тарифе.", show_alert=True)
+        return
+    update_group_setting(chat_id, "caps_threshold", threshold)
+    await query.answer(f"Порог CAPS установлен на {threshold}%")
+    # Возвращаемся к меню группы
+    await show_group_settings(query, chat_id)
+
+# ---------- ПЕРЕКЛЮЧЕНИЯ ----------
 async def toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, setting: str, chat_id: int):
     query = update.callback_query
     user_id = query.from_user.id
@@ -437,29 +492,52 @@ async def toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, set
     await query.answer(f"{setting.replace('_',' ').title()} {'включена' if new_val else 'выключена'}")
     await show_group_settings(query, chat_id)
 
-async def configure_flood(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+async def change_flood_parameter(update: Update, context: ContextTypes.DEFAULT_TYPE, param: str, delta: int, chat_id: int):
     query = update.callback_query
-    context.user_data["flood_chat"] = chat_id
-    await query.edit_message_text(
-        "Введите параметры антиспама в формате:\n"
-        "`лимит окно_секунд длительность_мута_секунд`\n"
-        "Пример: `5 10 60`\n\n"
-        "Или отправьте пустое сообщение для отмены.",
-        parse_mode="Markdown"
-    )
+    settings = get_group_settings(chat_id)
+    current = settings[param]
+    new_val = max(1, current + delta)
+    update_group_setting(chat_id, param, new_val)
+    await query.answer(f"{param} изменён на {new_val}")
+    await anti_spam_menu(update, context, chat_id)  # вернуться в меню антиспама
 
-async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+# ---------- ПРОФИЛЬ ----------
+async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
-    user_tariff = get_user_tariff(user_id)
-    if not TARIFF_FEATURES[user_tariff]["custom_welcome"]:
-        await query.answer("❌ Кастомное приветствие доступно только на платных тарифах.", show_alert=True)
-        return
-    context.user_data["welcome_chat"] = chat_id
-    await query.edit_message_text("Введите текст приветствия (или отправьте пустое сообщение для отключения):")
+    user = register_user(user_id)
+    tariff = get_user_tariff(user_id)
+    reg_date = datetime.fromisoformat(user["registered"]).strftime("%d.%m.%Y %H:%M")
+    text = (
+        f"👤 *Ваш профиль*\n"
+        f"🆔 ID: `{user_id}`\n"
+        f"📅 Дата регистрации: {reg_date}\n"
+        f"💎 Тариф: {tariff.upper()}\n"
+    )
+    if tariff != "free" and user.get("expiry"):
+        exp_date = datetime.fromisoformat(user["expiry"]).strftime("%d.%m.%Y")
+        text += f"⏰ Действует до: {exp_date}\n"
 
-async def toggle_files(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    await toggle_setting(update, context, "check_files", chat_id)
+    if user_id == ADMIN_ID:
+        text += "\n👑 *Вы являетесь главным администратором бота.*"
+    else:
+        # Проверяем, является ли пользователь администратором каких-либо групп (Telegram)
+        admin_groups = []
+        for cid in data["groups"]:
+            try:
+                chat = await context.bot.get_chat(int(cid))
+                member = await context.bot.get_chat_member(int(cid), user_id)
+                if member.status in ("administrator", "creator"):
+                    admin_groups.append(chat.title or f"Группа {cid}")
+            except:
+                pass
+        if admin_groups:
+            text += "\n\n*Вы администратор групп:*\n" + "\n".join(f"• {name}" for name in admin_groups[:10])
+        else:
+            text += "\n\n*Вы не являетесь администратором ни одной из групп, где есть бот.*"
+
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ---------- ТАРИФЫ ----------
 async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -496,7 +574,10 @@ async def buy_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE, tariff:
     description = f"Активация тарифа {tariff.upper()} на 30 дней"
     invoice = create_crypto_invoice(price_usd, description)
     if not invoice:
-        await query.edit_message_text("❌ Ошибка создания счёта. Попробуйте позже.")
+        await query.edit_message_text(
+            "❌ Ошибка создания счёта. Попробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]])
+        )
         return
     invoice_id = str(invoice["invoice_id"])
     pending_payments[invoice_id] = {"user_id": user_id, "tariff": tariff}
@@ -517,7 +598,10 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, invo
     query = update.callback_query
     await query.answer()
     if invoice_id not in pending_payments:
-        await query.edit_message_text("❌ Запрос на оплату не найден или устарел.")
+        await query.edit_message_text(
+            "❌ Запрос на оплату не найден или устарел.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]])
+        )
         return
     info = pending_payments[invoice_id]
     status = check_invoice_status(invoice_id)
@@ -529,11 +613,14 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, invo
         await query.edit_message_text(
             f"✅ *Оплата подтверждена!*\nТариф {tariff.upper()} активирован на 30 дней.\n"
             f"Теперь вы можете использовать расширенные функции в ваших группах.",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 В меню", callback_data="main_menu")]])
         )
-        await menu(update, context)
     else:
-        await query.edit_message_text("⏳ Оплата не обнаружена. Убедитесь, что вы завершили платёж, и нажмите снова.")
+        await query.edit_message_text(
+            "⏳ Оплата не обнаружена. Убедитесь, что вы завершили платёж, и нажмите снова.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]])
+        )
 
 def create_crypto_invoice(amount_usd: float, description: str) -> Optional[Dict]:
     url = "https://pay.crypt.bot/api/createInvoice"
@@ -597,7 +684,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             name = f"Группа {cid}"
         text += f"• {name} (`{cid}`)\n"
-    await query.edit_message_text(text, parse_mode="Markdown")
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
 
 async def admin_group_info_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -609,7 +696,7 @@ async def admin_group_info_request(update: Update, context: ContextTypes.DEFAULT
         "🔍 Введите ID группы (например, -1001234567890):\n"
         "*(можно скопировать из списка групп)*"
     )
-    await query.edit_message_text("Админ-панель ожидает ввод ID...")
+    await query.edit_message_text("Админ-панель ожидает ввод ID...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
 
 async def show_group_info(chat_id: int, message, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -646,7 +733,7 @@ async def show_group_info(chat_id: int, message, context: ContextTypes.DEFAULT_T
     except Exception as e:
         await message.reply_text(f"❌ Не удалось получить информацию о группе:\n{e}")
 
-# ---------- ОБРАБОТЧИК ТЕКСТА (ввод ID, антиспам, приветствие) ----------
+# ---------- ОБРАБОТЧИК ТЕКСТА ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_id = update.effective_user.id
@@ -710,7 +797,8 @@ async def show_group_settings_from_user(message, chat_id: int, context: ContextT
     text = (
         f"*Группа:* `{chat_id}`\n"
         f"*Ваш тариф:* {user_tariff.upper()}\n"
-        f"*Антиспам:* {settings['flood_limit']} сообщ. за {settings['flood_window']} сек\n"
+        f"*Антиспам:* {settings['flood_limit']} сообщ. за {settings['flood_window']} сек → мут {settings['flood_mute']} сек\n"
+        f"*CAPS порог:* {settings.get('caps_threshold', 70)}%\n"
         f"*Блокировка ссылок:* {'✅' if settings['block_links'] else '❌'}\n"
         f"*Блокировка инвайт-ссылок:* {'✅' if settings['invite_links_block'] else '❌'}\n"
         f"*Фильтр CAPS:* {'✅' if settings['caps_filter'] else '❌'}\n"
@@ -720,21 +808,20 @@ async def show_group_settings_from_user(message, chat_id: int, context: ContextT
         f"*Статистика:* сообщений {settings['stats']['messages']}, нарушений {settings['stats']['violations']}"
     )
     keyboard = []
-    keyboard.append([InlineKeyboardButton("⚙️ Настроить антиспам", callback_data=f"configure_flood_{chat_id}")])
-
+    keyboard.append([InlineKeyboardButton("⚙️ Антиспам", callback_data=f"anti_spam_{chat_id}")])
+    if allowed_features["caps_filter"]:
+        keyboard.append([InlineKeyboardButton("🔠 CAPS порог", callback_data=f"caps_threshold_{chat_id}")])
+        keyboard.append([InlineKeyboardButton("🔠 CAPS: Вкл/Выкл", callback_data=f"toggle_caps_{chat_id}")])
     if allowed_features["block_links"]:
         keyboard.append([InlineKeyboardButton("🔗 Ссылки: Вкл/Выкл", callback_data=f"toggle_links_{chat_id}")])
     if allowed_features["invite_links_block"]:
         keyboard.append([InlineKeyboardButton("🚫 Инвайт-ссылки: Вкл/Выкл", callback_data=f"toggle_invite_{chat_id}")])
-    if allowed_features["caps_filter"]:
-        keyboard.append([InlineKeyboardButton("🔠 CAPS фильтр: Вкл/Выкл", callback_data=f"toggle_caps_{chat_id}")])
     if allowed_features["block_media"]:
         keyboard.append([InlineKeyboardButton("📷 Медиа: Вкл/Выкл", callback_data=f"toggle_media_{chat_id}")])
     if allowed_features["custom_welcome"]:
         keyboard.append([InlineKeyboardButton("✏️ Кастомное приветствие", callback_data=f"set_welcome_{chat_id}")])
     if allowed_features["check_files"]:
         keyboard.append([InlineKeyboardButton("📁 Проверка файлов: Вкл/Выкл", callback_data=f"toggle_files_{chat_id}")])
-
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="groups")])
 
     await message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -754,6 +841,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data_cb == "show_tariffs":
         await show_tariffs(update, context)
         return
+    if data_cb == "profile":
+        await show_profile(update, context)
+        return
     if data_cb == "buy_standard":
         await buy_tariff(update, context, "standard")
         return
@@ -770,11 +860,56 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_group_info_request(update, context)
         return
 
+    # Группа
     if data_cb.startswith("group_"):
         chat_id = int(data_cb.split("_")[1])
         await show_group_settings(query, chat_id)
         return
 
+    # Антиспам
+    if data_cb.startswith("anti_spam_"):
+        chat_id = int(data_cb.split("_")[2])
+        await anti_spam_menu(update, context, chat_id)
+        return
+    # Изменение параметров антиспама
+    if data_cb.startswith("limit_inc_"):
+        chat_id = int(data_cb.split("_")[2])
+        await change_flood_parameter(update, context, "flood_limit", 1, chat_id)
+        return
+    if data_cb.startswith("limit_dec_"):
+        chat_id = int(data_cb.split("_")[2])
+        await change_flood_parameter(update, context, "flood_limit", -1, chat_id)
+        return
+    if data_cb.startswith("window_inc_"):
+        chat_id = int(data_cb.split("_")[2])
+        await change_flood_parameter(update, context, "flood_window", 5, chat_id)
+        return
+    if data_cb.startswith("window_dec_"):
+        chat_id = int(data_cb.split("_")[2])
+        await change_flood_parameter(update, context, "flood_window", -5, chat_id)
+        return
+    if data_cb.startswith("mute_inc_"):
+        chat_id = int(data_cb.split("_")[2])
+        await change_flood_parameter(update, context, "flood_mute", 30, chat_id)
+        return
+    if data_cb.startswith("mute_dec_"):
+        chat_id = int(data_cb.split("_")[2])
+        await change_flood_parameter(update, context, "flood_mute", -30, chat_id)
+        return
+
+    # CAPS порог
+    if data_cb.startswith("caps_threshold_"):
+        chat_id = int(data_cb.split("_")[2])
+        await caps_threshold_menu(update, context, chat_id)
+        return
+    if data_cb.startswith("select_caps_"):
+        parts = data_cb.split("_")
+        threshold = int(parts[2])
+        chat_id = int(parts[3])
+        await set_caps_threshold(update, context, threshold, chat_id)
+        return
+
+    # Переключения
     if data_cb.startswith("toggle_links_"):
         chat_id = int(data_cb.split("_")[2])
         await toggle_setting(update, context, "block_links", chat_id)
@@ -796,15 +931,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await toggle_setting(update, context, "check_files", chat_id)
         return
 
-    if data_cb.startswith("configure_flood_"):
-        chat_id = int(data_cb.split("_")[2])
-        await configure_flood(update, context, chat_id)
-        return
+    # Приветствие
     if data_cb.startswith("set_welcome_"):
         chat_id = int(data_cb.split("_")[2])
-        await set_welcome(update, context, chat_id)
+        context.user_data["welcome_chat"] = chat_id
+        await query.edit_message_text("Введите текст приветствия (или отправьте пустое сообщение для отключения):")
         return
 
+    # Оплата
     if data_cb.startswith("check_payment_"):
         invoice_id = data_cb.split("_")[2]
         await check_payment(update, context, invoice_id)
@@ -830,7 +964,7 @@ def main():
     application.add_handler(CommandHandler("menu", menu))
 
     # Обработчики кнопок и текста
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(groups|show_tariffs|buy_standard|buy_pro|admin_panel|admin_stats|admin_group_info|group_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|configure_flood_|set_welcome_|check_payment_|main_menu)"))
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(groups|show_tariffs|profile|buy_standard|buy_pro|admin_panel|admin_stats|admin_group_info|group_|anti_spam_|limit_inc_|limit_dec_|window_inc_|window_dec_|mute_inc_|mute_dec_|caps_threshold_|select_caps_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|set_welcome_|check_payment_|main_menu)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logging.info("✅ Бот запущен")
@@ -838,3 +972,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
