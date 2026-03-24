@@ -309,10 +309,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await is_group_admin(chat.id, user.id, context):
             return
 
-        # Проверка прав бота
+        # Проверка прав бота (только если он администратор и имеет право блокировать)
         try:
             bot_member = await chat.get_member(context.bot.id)
-            if not bot_member.can_restrict_members:
+            if bot_member.status != "administrator" or not bot_member.can_restrict_members:
                 return
         except:
             return
@@ -411,11 +411,17 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Проверяем, что бот есть в группе и имеет права
     try:
         bot_member = await chat.get_member(context.bot.id)
-        if bot_member.status not in ("administrator", "member"):
-            await update.message.reply_text("❌ Бот не является участником этой группы. Добавьте его сначала.")
+        if bot_member.status != "administrator":
+            await update.message.reply_text(
+                "❌ Бот не является администратором.\n"
+                "Назначьте его администратором в настройках группы (все права не обязательны, но нужно включить «Удаление сообщений» и «Блокировка пользователей»)."
+            )
             return
         if not bot_member.can_restrict_members:
-            await update.message.reply_text("⚠️ Бот не имеет прав на ограничение участников. Назначьте его администратором с правом «Блокировка пользователей».")
+            await update.message.reply_text(
+                "⚠️ Бот не имеет права «Блокировка пользователей».\n"
+                "В настройках администратора группы включите для бота это право."
+            )
             return
     except Exception as e:
         await update.message.reply_text(f"❌ Не удалось проверить права бота: {e}")
@@ -796,7 +802,7 @@ def create_crypto_invoice(amount_usd: float, description: str) -> Optional[Dict]
         "amount": amount_usd,
         "description": description,
         "paid_btn_name": "callback",
-        "paid_btn_url": "https://t.me/YourBotUsername"  # замените на имя бота
+        "paid_btn_url": "https://t.me/YourBotUsername"
     }
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
