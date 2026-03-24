@@ -17,7 +17,7 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = "YOUR_BOT_TOKEN"
+TOKEN = "8768850938:AAGXlxCENVXIqUXAJMBG2bl2xgUwNAJOc4Q"
 DATA_FILE = "bot_data.json"
 ADMIN_ID = 2032012311
 
