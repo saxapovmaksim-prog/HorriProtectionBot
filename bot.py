@@ -1,31 +1,26 @@
 import json
 import logging
 import os
-import requests
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, List
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    ChatPermissions
+)
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
 
 TOKEN = "8768850938:AAGXlxCENVXIqUXAJMBG2bl2xgUwNAJOc4Q"
-CRYPTO_TOKEN = "555209:AAvWWWiQt0ERfGAjTGozQDu1HEAZICFi4ZW"
-
 ADMIN_ID = 2032012311
 DATA_FILE = "bot_data.json"
 
-PRICES = {
-    "standard": 1.0,
-    "pro": 2.0
-}
-
-data: Dict = {"groups": {}, "admins": [ADMIN_ID]}
-user_messages: Dict[int, List[datetime]] = defaultdict(list)
-payments: Dict = {}
+data = {"groups": {}, "admins": [ADMIN_ID]}
+user_messages = defaultdict(list)
+pending_links = {}
 
 # ---------- DATA ----------
 def load_data():
@@ -45,44 +40,24 @@ def get_group(chat_id):
             "tariff": "free",
             "flood_limit": 5,
             "flood_window": 10,
-            "stats": {"messages": 0, "violations": 0}
+            "admins": [],
         }
         save_data()
     return data["groups"][cid]
 
-# ---------- CRYPTO ----------
-def create_invoice(amount, desc):
-    url = "https://pay.crypt.bot/api/createInvoice"
-    headers = {"Crypto-Pay-API-Token": CRYPTO_TOKEN}
-    payload = {
-        "asset": "USDT",
-        "amount": amount,
-        "description": desc
-    }
-    r = requests.post(url, json=payload, headers=headers).json()
-    if r.get("ok"):
-        return r["result"]
-    return None
+# ---------- UTILS ----------
+def contains_link(text):
+    return bool(re.search(r'(https?://|t\.me|www\.)\S+', text))
 
-def check_invoice(invoice_id):
-    url = "https://pay.crypt.bot/api/getInvoices"
-    headers = {"Crypto-Pay-API-Token": CRYPTO_TOKEN}
-    params = {"invoice_ids": invoice_id}
-    r = requests.get(url, headers=headers, params=params).json()
-    if r.get("ok"):
-        items = r["result"]["items"]
-        if items and items[0]["status"] == "paid":
-            return True
-    return False
-
-# ---------- АНТИСПАМ ----------
 def is_flood(user_id, chat_id):
     settings = get_group(chat_id)
     now = datetime.now()
+
     msgs = user_messages[user_id]
     msgs = [m for m in msgs if m > now - timedelta(seconds=settings["flood_window"])]
     msgs.append(now)
     user_messages[user_id] = msgs
+
     return len(msgs) > settings["flood_limit"]
 
 async def restrict(chat_id, user_id, context):
@@ -100,121 +75,157 @@ async def restrict(chat_id, user_id, context):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
+    msg = update.effective_message
 
     if not chat:
         return
 
     if chat.type in ("group", "supergroup"):
-        get_group(chat.id)
+        group = get_group(chat.id)
 
     if not user or user.is_bot:
         return
 
-    settings = get_group(chat.id)
-    settings["stats"]["messages"] += 1
-    save_data()
-
+    # антифлуд
     if is_flood(user.id, chat.id):
         await restrict(chat.id, user.id, context)
-        settings["stats"]["violations"] += 1
-        save_data()
-
-# ---------- MENU ----------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await menu(update, context)
-
-async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = []
-    for gid in data["groups"]:
-        keyboard.append([InlineKeyboardButton(f"Группа {gid}", callback_data=f"group_{gid}")])
-
-    await update.message.reply_text("Выбери группу:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-# ---------- ГРУППА ----------
-async def group_menu(query, chat_id):
-    settings = get_group(chat_id)
-
-    text = f"Группа {chat_id}\nТариф: {settings['tariff']}"
-
-    keyboard = [
-        [InlineKeyboardButton("Сменить тариф", callback_data=f"tariff_{chat_id}")]
-    ]
-
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-# ---------- ТАРИФ ----------
-async def tariff_menu(query, chat_id):
-    keyboard = [
-        [InlineKeyboardButton("FREE", callback_data=f"set_free_{chat_id}")],
-        [InlineKeyboardButton("STANDARD", callback_data=f"buy_standard_{chat_id}")],
-        [InlineKeyboardButton("PRO", callback_data=f"buy_pro_{chat_id}")]
-    ]
-    await query.edit_message_text("Выбери тариф:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-# ---------- ПОКУПКА ----------
-async def buy_tariff(query, chat_id, tariff):
-    price = PRICES[tariff]
-    invoice = create_invoice(price, f"{tariff} for {chat_id}")
-
-    if not invoice:
-        await query.edit_message_text("Ошибка оплаты")
         return
 
-    invoice_id = str(invoice["invoice_id"])
-    payments[invoice_id] = {"chat_id": chat_id, "tariff": tariff}
+    # ссылки
+    if msg.text and contains_link(msg.text):
+        await msg.delete()
 
+        link_id = f"{chat.id}_{user.id}_{int(datetime.now().timestamp())}"
+        pending_links[link_id] = {
+            "chat_id": chat.id,
+            "user_id": user.id,
+            "text": msg.text
+        }
+
+        # уведомление в группе
+        await context.bot.send_message(
+            chat.id,
+            "🔍 Ссылка отправлена на проверку"
+        )
+
+        # отправка админам группы
+        for admin_id in group["admins"]:
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{link_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_{link_id}")
+                ]
+            ]
+
+            try:
+                await context.bot.send_message(
+                    admin_id,
+                    f"Проверка ссылки:\n{msg.text}\nОт: {user.id}",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except:
+                pass
+
+# ---------- МЕНЮ ----------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("💳 Оплатить", url=invoice["pay_url"])],
-        [InlineKeyboardButton("✅ Проверить", callback_data=f"check_{invoice_id}")]
+        [InlineKeyboardButton("📋 Группы", callback_data="groups")],
+        [InlineKeyboardButton("⚙️ Настройки", callback_data="settings")],
     ]
 
-    await query.edit_message_text("Оплати и нажми проверить", reply_markup=InlineKeyboardMarkup(keyboard))
+    if update.effective_user.id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton("👑 Админ панель", callback_data="admin")])
+
+    await update.message.reply_text(
+        "Главное меню:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 # ---------- CALLBACK ----------
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data_cb = query.data
 
-    if data_cb.startswith("group_"):
-        await group_menu(query, int(data_cb.split("_")[1]))
+    # список групп
+    if data_cb == "groups":
+        keyboard = []
+        for gid in data["groups"]:
+            keyboard.append([
+                InlineKeyboardButton(f"Группа {gid}", callback_data=f"group_{gid}")
+            ])
+        await query.edit_message_text("Твои группы:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif data_cb.startswith("tariff_"):
-        await tariff_menu(query, int(data_cb.split("_")[1]))
+    # выбор группы
+    elif data_cb.startswith("group_"):
+        chat_id = int(data_cb.split("_")[1])
+        keyboard = [
+            [InlineKeyboardButton("Антиспам", callback_data=f"spam_{chat_id}")],
+            [InlineKeyboardButton("Админы", callback_data=f"admins_{chat_id}")]
+        ]
+        await query.edit_message_text("Управление группой:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif data_cb.startswith("set_free_"):
+    # антиспам настройки
+    elif data_cb.startswith("spam_"):
+        chat_id = int(data_cb.split("_")[1])
+        settings = get_group(chat_id)
+
+        text = f"Антиспам:\nЛимит: {settings['flood_limit']}\nОкно: {settings['flood_window']} сек"
+
+        keyboard = [
+            [InlineKeyboardButton("+1 лимит", callback_data=f"inc_limit_{chat_id}")],
+            [InlineKeyboardButton("+5 сек", callback_data=f"inc_time_{chat_id}")]
+        ]
+
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data_cb.startswith("inc_limit_"):
         chat_id = int(data_cb.split("_")[2])
-        get_group(chat_id)["tariff"] = "free"
+        get_group(chat_id)["flood_limit"] += 1
         save_data()
-        await query.edit_message_text("FREE активирован")
+        await query.answer("Лимит увеличен")
 
-    elif data_cb.startswith("buy_"):
-        parts = data_cb.split("_")
-        tariff = parts[1]
-        chat_id = int(parts[2])
-        await buy_tariff(query, chat_id, tariff)
+    elif data_cb.startswith("inc_time_"):
+        chat_id = int(data_cb.split("_")[2])
+        get_group(chat_id)["flood_window"] += 5
+        save_data()
+        await query.answer("Окно увеличено")
 
-    elif data_cb.startswith("check_"):
-        invoice_id = data_cb.split("_")[1]
+    # админы группы
+    elif data_cb.startswith("admins_"):
+        chat_id = int(data_cb.split("_")[1])
+        group = get_group(chat_id)
 
-        if invoice_id not in payments:
-            await query.edit_message_text("Платеж не найден")
-            return
+        text = "Админы:\n" + "\n".join(map(str, group["admins"]))
+        await query.edit_message_text(text)
 
-        if check_invoice(invoice_id):
-            info = payments[invoice_id]
-            chat_id = info["chat_id"]
-            tariff = info["tariff"]
+    # одобрение
+    elif data_cb.startswith("approve_"):
+        link_id = data_cb.split("_", 1)[1]
 
-            get_group(chat_id)["tariff"] = tariff
-            save_data()
+        if link_id in pending_links:
+            info = pending_links[link_id]
 
-            del payments[invoice_id]
+            await context.bot.send_message(
+                info["chat_id"],
+                f"✅ Одобрено:\n{info['text']}\nID: {info['user_id']}"
+            )
 
-            await query.edit_message_text(f"✅ Оплата прошла! Тариф {tariff}")
-        else:
-            await query.edit_message_text("❌ Не оплачено")
+            del pending_links[link_id]
+            await query.edit_message_text("Одобрено")
+
+    # отклонение
+    elif data_cb.startswith("decline_"):
+        link_id = data_cb.split("_", 1)[1]
+
+        if link_id in pending_links:
+            del pending_links[link_id]
+            await query.edit_message_text("❌ Отклонено")
+
+    # админ панель
+    elif data_cb == "admin" and update.effective_user.id == ADMIN_ID:
+        text = f"👑 Админ панель\nГрупп: {len(data['groups'])}"
+        await query.edit_message_text(text)
 
 # ---------- MAIN ----------
 def main():
@@ -224,10 +235,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("menu", menu))
-
     app.add_handler(CallbackQueryHandler(buttons))
-
     app.add_handler(MessageHandler(filters.ALL, handle_message))
 
     print("Бот запущен")
