@@ -1,4 +1,3 @@
-```python
 import asyncio
 import json
 import logging
@@ -23,13 +22,11 @@ TOKEN = "8768850938:AAGXlxCENVXIqUXAJMBG2bl2xgUwNAJOc4Q"
 CRYPTOBOT_TOKEN = "555209:AAvWWWiQt0ERfGAjTGozQDu1HEAZICFi4ZW"
 ADMIN_ID = 2032012311
 DATA_FILE = "bot_data.json"
-USER_DATA_FILE = "user_data.json"  # отдельный файл для пользователей
+USER_DATA_FILE = "user_data.json"
 
-# Цены в рублях и долларах
 PRICES_RUB = {"standard": 99, "pro": 199}
 PRICES_USD = {"standard": 0.99, "pro": 1.99}
 
-# Возможности, доступные в зависимости от тарифа
 TARIFF_FEATURES = {
     "free": {
         "block_links": True,
@@ -75,16 +72,15 @@ DEFAULT_SETTINGS = {
 }
 
 # ---------- ГЛОБАЛЬНЫЕ ДАННЫЕ ----------
-data: Dict = {"groups": {}}      # группы: {chat_id: settings}
-user_data: Dict = {}             # пользователи: {user_id: {registered, tariff, expiry}}
+data: Dict = {"groups": {}}
+user_data: Dict = {}
 user_messages: Dict[int, List[datetime]] = defaultdict(list)
 pending_payments: Dict[str, dict] = {}
-user_states: Dict[int, str] = {}  # для ожидания ввода ID
+user_states: Dict[int, str] = {}
 
 # ---------- ЗАГРУЗКА / СОХРАНЕНИЕ ----------
 def load_data():
     global data, user_data
-    # Загружаем группы
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -100,7 +96,6 @@ def load_data():
     else:
         data = {"groups": {}}
 
-    # Загружаем пользователей
     if os.path.exists(USER_DATA_FILE):
         try:
             with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
@@ -144,7 +139,6 @@ def update_group_setting(chat_id: int, key: str, value):
     set_group_settings(chat_id, settings)
 
 def register_user(user_id: int) -> Dict:
-    """Регистрирует пользователя, если его нет."""
     uid = str(user_id)
     if uid not in user_data:
         user_data[uid] = {
@@ -157,16 +151,13 @@ def register_user(user_id: int) -> Dict:
     return user_data[uid]
 
 def get_user_tariff(user_id: int) -> str:
-    """Возвращает текущий тариф пользователя с учётом срока действия."""
     uid = str(user_id)
     if uid not in user_data:
         register_user(user_id)
     user = user_data[uid]
-    # Проверяем срок действия платного тарифа
     if user["tariff"] != "free" and user["expiry"]:
         expiry = datetime.fromisoformat(user["expiry"])
         if datetime.now() > expiry:
-            # Тариф истёк – сбрасываем на бесплатный
             user["tariff"] = "free"
             user["expiry"] = None
             save_user_data()
@@ -174,7 +165,6 @@ def get_user_tariff(user_id: int) -> str:
     return user["tariff"]
 
 def set_user_tariff(user_id: int, tariff: str, duration_days: int = 30):
-    """Устанавливает платный тариф на указанное количество дней."""
     uid = str(user_id)
     if uid not in user_data:
         register_user(user_id)
@@ -247,94 +237,90 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.effective_message
 
+    # Логируем полученное сообщение
+    logging.info(f"Получено сообщение от {user.id} в чате {chat.id} (тип {chat.type})")
+
     if user.is_bot:
         return
 
-    # Если это группа, убеждаемся, что есть настройки
+    # Если это группа, применяем защиту
     if chat.type in ("group", "supergroup"):
+        # Убеждаемся, что настройки есть
         settings = get_group_settings(chat.id)
-    else:
-        return  # игнорируем личные сообщения (только команды)
 
-    # Если пользователь администратор группы – пропускаем проверки
-    if await is_group_admin(chat.id, user.id, context):
-        return
+        # Статистика
+        settings["stats"]["messages"] += 1
+        set_group_settings(chat.id, settings)
 
-    # Статистика сообщений
-    settings["stats"]["messages"] += 1
-    set_group_settings(chat.id, settings)
-
-    # Проверка прав бота
-    try:
-        bot_member = await chat.get_member(context.bot.id)
-        if not bot_member.can_restrict_members:
+        # Если пользователь админ – пропускаем проверки
+        if await is_group_admin(chat.id, user.id, context):
             return
-    except:
-        return
 
-    # 1. Антифлуд
-    if is_flooding(user.id, chat.id):
-        await restrict_user(chat.id, user.id, settings["flood_mute"], "Флуд", context)
+        # Проверка прав бота
         try:
-            await message.delete()
+            bot_member = await chat.get_member(context.bot.id)
+            if not bot_member.can_restrict_members:
+                return
         except:
-            pass
-        return
+            return
 
-    # 2. Блокировка ссылок (обычные)
-    if settings.get("block_links", True) and message.text and contains_link(message.text):
-        await restrict_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
-        try:
+        # Антифлуд
+        if is_flooding(user.id, chat.id):
+            await restrict_user(chat.id, user.id, settings["flood_mute"], "Флуд", context)
+            try:
+                await message.delete()
+            except:
+                pass
+            return
+
+        # Блокировка обычных ссылок
+        if settings.get("block_links", True) and message.text and contains_link(message.text):
+            await restrict_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
+            try:
+                await message.delete()
+            except:
+                pass
+            return
+
+        # Блокировка инвайт-ссылок
+        if settings.get("invite_links_block", True) and message.text and contains_invite_link(message.text):
+            await restrict_user(chat.id, user.id, 60, "Запрещённые инвайт-ссылки", context)
+            try:
+                await message.delete()
+            except:
+                pass
+            return
+
+        # CAPS (если включено)
+        if settings.get("caps_filter", False) and message.text and is_caps_abuse(message.text):
+            await restrict_user(chat.id, user.id, 60, "Злоупотребление заглавными буквами", context)
+            try:
+                await message.delete()
+            except:
+                pass
+            return
+
+        # Блокировка медиа (если включено)
+        if settings.get("block_media", False) and any((message.photo, message.video, message.document,
+                                                       message.voice, message.audio, message.animation, message.sticker)):
+            await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
+            try:
+                await message.delete()
+            except:
+                pass
+            return
+
+        # Отправка файлов на проверку
+        if settings.get("check_files", False) and message.document:
+            await message.reply_text("📁 Файл отправлен на проверку")
             await message.delete()
-        except:
-            pass
-        return
-
-    # 3. Блокировка инвайт-ссылок
-    if settings.get("invite_links_block", True) and message.text and contains_invite_link(message.text):
-        await restrict_user(chat.id, user.id, 60, "Запрещённые инвайт-ссылки", context)
-        try:
-            await message.delete()
-        except:
-            pass
-        return
-
-    # 4. CAPS (если включено)
-    if settings.get("caps_filter", False) and message.text and is_caps_abuse(message.text):
-        await restrict_user(chat.id, user.id, 60, "Злоупотребление заглавными буквами", context)
-        try:
-            await message.delete()
-        except:
-            pass
-        return
-
-    # 5. Блокировка медиа (если включено)
-    if settings.get("block_media", False) and any((message.photo, message.video, message.document,
-                                                   message.voice, message.audio, message.animation, message.sticker)):
-        await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
-        try:
-            await message.delete()
-        except:
-            pass
-        return
-
-    # 6. Отправка файлов на проверку (если включено)
-    if settings.get("check_files", False) and message.document:
-        # Здесь можно отправить файл модератору
-        await message.reply_text("📁 Файл отправлен на проверку")
-        await message.delete()
-
-    # 7. Проверка контента (если включено)
-    if settings.get("check_content", False):
-        # Здесь можно вызвать внешний API для проверки
-        pass
+    # Для личных сообщений ничего не делаем, они будут обработаны handle_text
 
 # ---------- НОВЫЕ УЧАСТНИКИ ----------
 async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     for member in update.message.new_chat_members:
         if member.id == context.bot.id:
-            # Бот добавлен – регистрируем группу
             get_group_settings(chat.id)
             await update.message.reply_text(
                 "🤖 *Бот-защитник активирован!*\n\n"
@@ -344,7 +330,6 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
             )
             return
 
-    # Кастомное приветствие (если включено)
     settings = get_group_settings(chat.id)
     if settings.get("custom_welcome"):
         for member in update.message.new_chat_members:
@@ -354,7 +339,7 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
 # ---------- МЕНЮ ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    register_user(user_id)  # регистрируем, если новый
+    register_user(user_id)
     await menu(update, context)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -389,16 +374,13 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("📋 *Список групп:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def show_group_settings(query, chat_id: int):
-    """Меню настройки конкретной группы, с учётом тарифа пользователя."""
     user_id = query.from_user.id
-    # Проверяем, является ли пользователь администратором группы
     if not await is_group_admin(chat_id, user_id, query.message.get_bot()):
         await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
         return
 
     user_tariff = get_user_tariff(user_id)
     settings = get_group_settings(chat_id)
-    # Определяем, какие функции доступны пользователю
     allowed_features = TARIFF_FEATURES[user_tariff]
 
     text = (
@@ -414,11 +396,8 @@ async def show_group_settings(query, chat_id: int):
         f"*Статистика:* сообщений {settings['stats']['messages']}, нарушений {settings['stats']['violations']}"
     )
     keyboard = []
-
-    # Кнопка настройки антиспама доступна всем
     keyboard.append([InlineKeyboardButton("⚙️ Настроить антиспам", callback_data=f"configure_flood_{chat_id}")])
 
-    # Кнопки для функций, доступных в зависимости от тарифа
     if allowed_features["block_links"]:
         keyboard.append([InlineKeyboardButton("🔗 Ссылки: Вкл/Выкл", callback_data=f"toggle_links_{chat_id}")])
     if allowed_features["invite_links_block"]:
@@ -432,7 +411,6 @@ async def show_group_settings(query, chat_id: int):
     if allowed_features["check_files"]:
         keyboard.append([InlineKeyboardButton("📁 Проверка файлов: Вкл/Выкл", callback_data=f"toggle_files_{chat_id}")])
 
-    # Если тариф не позволяет использовать некоторые функции, показываем сообщение
     if user_tariff == "free":
         text += "\n\n⚠️ *Ваш тариф: бесплатный.* Чтобы включить дополнительные функции (медиа, CAPS, приветствие, проверку файлов), приобретите платный тариф в разделе «💰 Тарифы»."
     else:
@@ -481,7 +459,6 @@ async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_i
     await query.edit_message_text("Введите текст приветствия (или отправьте пустое сообщение для отключения):")
 
 async def toggle_files(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    """Отдельная функция для переключения проверки файлов."""
     await toggle_setting(update, context, "check_files", chat_id)
 
 # ---------- ТАРИФЫ ----------
@@ -554,7 +531,6 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, invo
             f"Теперь вы можете использовать расширенные функции в ваших группах.",
             parse_mode="Markdown"
         )
-        # Показываем главное меню
         await menu(update, context)
     else:
         await query.edit_message_text("⏳ Оплата не обнаружена. Убедитесь, что вы завершили платёж, и нажмите снова.")
@@ -674,6 +650,7 @@ async def show_group_info(chat_id: int, message, context: ContextTypes.DEFAULT_T
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_id = update.effective_user.id
+    chat = update.effective_chat
 
     # Ожидание ввода ID группы для админа
     if user_id == ADMIN_ID and user_states.get(user_id) == "await_group_id":
@@ -685,8 +662,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del user_states[user_id]
         return
 
-    # Настройка антиспама
-    if "flood_chat" in context.user_data:
+    # Настройка антиспама (только в личных сообщениях)
+    if chat.type == "private" and "flood_chat" in context.user_data:
         chat_id = context.user_data.pop("flood_chat")
         text = message.text.strip()
         if not text:
@@ -711,7 +688,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Настройка приветствия
-    if "welcome_chat" in context.user_data:
+    if chat.type == "private" and "welcome_chat" in context.user_data:
         chat_id = context.user_data.pop("welcome_chat")
         text = message.text.strip()
         if text:
@@ -744,6 +721,7 @@ async def show_group_settings_from_user(message, chat_id: int, context: ContextT
     )
     keyboard = []
     keyboard.append([InlineKeyboardButton("⚙️ Настроить антиспам", callback_data=f"configure_flood_{chat_id}")])
+
     if allowed_features["block_links"]:
         keyboard.append([InlineKeyboardButton("🔗 Ссылки: Вкл/Выкл", callback_data=f"toggle_links_{chat_id}")])
     if allowed_features["invite_links_block"]:
@@ -756,6 +734,7 @@ async def show_group_settings_from_user(message, chat_id: int, context: ContextT
         keyboard.append([InlineKeyboardButton("✏️ Кастомное приветствие", callback_data=f"set_welcome_{chat_id}")])
     if allowed_features["check_files"]:
         keyboard.append([InlineKeyboardButton("📁 Проверка файлов: Вкл/Выкл", callback_data=f"toggle_files_{chat_id}")])
+
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="groups")])
 
     await message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -766,17 +745,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data_cb = query.data
 
-    # Главное меню
     if data_cb == "main_menu":
         await menu(update, context)
         return
-
-    # Список групп
     if data_cb == "groups":
         await show_groups(update, context)
         return
-
-    # Тарифы
     if data_cb == "show_tariffs":
         await show_tariffs(update, context)
         return
@@ -786,8 +760,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data_cb == "buy_pro":
         await buy_tariff(update, context, "pro")
         return
-
-    # Админ-панель
     if data_cb == "admin_panel":
         await admin_panel(update, context)
         return
@@ -798,13 +770,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_group_info_request(update, context)
         return
 
-    # Группа
     if data_cb.startswith("group_"):
         chat_id = int(data_cb.split("_")[1])
         await show_group_settings(query, chat_id)
         return
 
-    # Переключения настроек
     if data_cb.startswith("toggle_links_"):
         chat_id = int(data_cb.split("_")[2])
         await toggle_setting(update, context, "block_links", chat_id)
@@ -826,19 +796,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await toggle_setting(update, context, "check_files", chat_id)
         return
 
-    # Настройка антиспама
     if data_cb.startswith("configure_flood_"):
         chat_id = int(data_cb.split("_")[2])
         await configure_flood(update, context, chat_id)
         return
-
-    # Кастомное приветствие
     if data_cb.startswith("set_welcome_"):
         chat_id = int(data_cb.split("_")[2])
         await set_welcome(update, context, chat_id)
         return
 
-    # Оплата
     if data_cb.startswith("check_payment_"):
         invoice_id = data_cb.split("_")[2]
         await check_payment(update, context, invoice_id)
@@ -854,7 +820,7 @@ def main():
 
     application = Application.builder().token(TOKEN).build()
 
-    # Защита сообщений
+    # Защита
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_message))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_chat_members))
@@ -863,7 +829,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", menu))
 
-    # Обработчики кнопок и текстовых вводов
+    # Обработчики кнопок и текста
     application.add_handler(CallbackQueryHandler(button_callback, pattern="^(groups|show_tariffs|buy_standard|buy_pro|admin_panel|admin_stats|admin_group_info|group_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|configure_flood_|set_welcome_|check_payment_|main_menu)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
@@ -872,4 +838,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
