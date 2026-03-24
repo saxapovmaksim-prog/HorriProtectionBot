@@ -135,6 +135,22 @@ def delete_group(chat_id: int):
         return True
     return False
 
+def add_group_by_id(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Проверяет, что бот есть в группе, и добавляет её в базу."""
+    try:
+        chat = context.bot.get_chat(chat_id)
+        if chat.type not in ("group", "supergroup"):
+            return False
+        bot_member = context.bot.get_chat_member(chat_id, context.bot.id)
+        if bot_member.status not in ("administrator", "member"):
+            return False
+        # Если всё ок, создаём настройки
+        get_group_settings(chat_id)
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка при добавлении группы {chat_id}: {e}")
+        return False
+
 def clean_invalid_groups(context: ContextTypes.DEFAULT_TYPE):
     """Удаляет группы, в которых бот больше не состоит."""
     to_delete = []
@@ -221,21 +237,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot or await is_admin(chat.id, user.id, context):
         return
 
-    # Если бот не имеет прав администратора в этой группе – ничего не делаем
+    # Если группа не зарегистрирована – пробуем зарегистрировать
+    if str(chat.id) not in data["groups"]:
+        # Проверяем, что бот есть в группе и имеет права
+        try:
+            bot_member = await chat.get_member(context.bot.id)
+            if bot_member.status in ("administrator", "member"):
+                get_group_settings(chat.id)
+        except:
+            pass
+
+    settings = get_group_settings(chat.id)
+    settings["stats"]["messages"] += 1
+    set_group_settings(chat.id, settings)
+
+    # Если бот не имеет прав администратора – не можем наказывать, но статистику считаем
     try:
         bot_member = await chat.get_member(context.bot.id)
         if not bot_member.can_restrict_members:
             return
     except:
         return
-
-    # Если группа ещё не зарегистрирована – регистрируем автоматически
-    if str(chat.id) not in data["groups"]:
-        get_group_settings(chat.id)
-
-    settings = get_group_settings(chat.id)
-    settings["stats"]["messages"] += 1
-    set_group_settings(chat.id, settings)
 
     # Антифлуд
     if is_flooding(user.id, chat.id):
@@ -549,6 +571,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("Список групп", callback_data="admin_groups")],
         [InlineKeyboardButton("Управление админами", callback_data="admin_admins")],
         [InlineKeyboardButton("Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("Добавить группу по ID", callback_data="add_group_by_id")],
         [InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")],
     ]
     await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -572,7 +595,7 @@ async def admin_groups_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat = await context.bot.get_chat(int(chat_id_str))
             title = chat.title or f"Группа {chat_id_str}"
         except:
-            continue
+            title = f"Группа {chat_id_str}"
         keyboard.append([
             InlineKeyboardButton(f"{title}", callback_data=f"group_{chat_id_str}"),
             InlineKeyboardButton("❌ Удалить", callback_data=f"delete_group_{chat_id_str}")
@@ -582,6 +605,51 @@ async def admin_groups_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Выберите группу для настройки или удаления:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+async def add_group_by_id_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Введите ID группы (число):")
+    context.user_data["waiting_for_group_id"] = True
+
+async def handle_group_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ввода ID группы для добавления."""
+    message = update.message
+    user_id = update.effective_user.id
+    if user_id not in data.get("admins", []):
+        await message.reply_text("⛔ У вас нет доступа.")
+        return
+    if not context.user_data.get("waiting_for_group_id"):
+        return
+    context.user_data.pop("waiting_for_group_id")
+    try:
+        chat_id = int(message.text.strip())
+    except:
+        await message.reply_text("❌ Неверный формат. Введите числовой ID.")
+        return
+
+    # Проверяем, что бот есть в группе и может её добавить
+    try:
+        chat = await context.bot.get_chat(chat_id)
+        if chat.type not in ("group", "supergroup"):
+            await message.reply_text("❌ Указанный ID не является группой или супергруппой.")
+            return
+        bot_member = await context.bot.get_chat_member(chat_id, context.bot.id)
+        if bot_member.status not in ("administrator", "member"):
+            await message.reply_text("❌ Бот не является участником этой группы. Добавьте его сначала.")
+            return
+        # Проверка прав – необязательна, но предупредим
+        if not bot_member.can_restrict_members:
+            await message.reply_text("⚠️ Бот добавлен, но не имеет прав на ограничение пользователей. Назначьте его администратором в группе.")
+    except Exception as e:
+        await message.reply_text(f"❌ Ошибка при проверке группы: {e}")
+        return
+
+    # Добавляем группу
+    get_group_settings(chat_id)
+    await message.reply_text(f"✅ Группа {chat.title or chat_id} добавлена в базу бота.")
+    # Показываем меню с группами
+    await menu(update, context)
 
 async def delete_group_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id_str: str):
     query = update.callback_query
@@ -687,6 +755,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data_cb == "close_admin":
         await query.edit_message_text("Админ-панель закрыта.")
         return
+    if data_cb == "add_group_by_id":
+        await add_group_by_id_callback(update, context)
+        return
 
     # Удаление группы
     if data_cb.startswith("delete_group_"):
@@ -771,8 +842,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ввода приветствия и антиспама."""
+    """Обработка ввода приветствия, антиспама и ID группы."""
     message = update.message
+    user_id = update.effective_user.id
+
+    # Если ожидаем ID группы для добавления
+    if context.user_data.get("waiting_for_group_id") and user_id in data.get("admins", []):
+        await handle_group_id_input(update, context)
+        return
+
     if "welcome_chat" in context.user_data:
         chat_id = context.user_data.pop("welcome_chat")
         text = message.text.strip()
@@ -782,7 +860,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             update_group_setting(chat_id, "custom_welcome", None)
             await message.reply_text("✅ Кастомное приветствие отключено.")
-        # Показываем меню группы
         await show_group_menu_from_user(update, chat_id, context)
         return
 
@@ -864,7 +941,7 @@ def main():
     application.add_handler(CommandHandler("deladmin", del_admin))
 
     # Callback'и
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|choose_tariff_|select_tariff_|check_payment_|cancel_payment_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|set_welcome_|configure_flood_|back_to_groups|close|admin_panel|admin_groups|admin_admins|admin_stats|close_admin|delete_group_|confirm_delete_)"))
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(group_|choose_tariff_|select_tariff_|check_payment_|cancel_payment_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|set_welcome_|configure_flood_|back_to_groups|close|admin_panel|admin_groups|admin_admins|admin_stats|close_admin|delete_group_|confirm_delete_|add_group_by_id)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logging.info("Бот запущен и готов к работе!")
