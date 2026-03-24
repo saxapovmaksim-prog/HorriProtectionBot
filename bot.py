@@ -115,8 +115,7 @@ def get_group_settings(chat_id: int) -> Dict:
         settings = DEFAULT_SETTINGS.copy()
         data["groups"][chat_id_str] = settings
         save_data()
-        logging.info(f"Создана новая запись для группы {chat_id}")
-        return settings
+        logging.info(f"Создана запись для группы {chat_id}")
     return data["groups"][chat_id_str]
 
 def set_group_settings(chat_id: int, settings: Dict):
@@ -238,15 +237,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot:
         return
 
-    # Если группа не зарегистрирована – пробуем зарегистрировать
+    # Если группа не зарегистрирована – автоматически создаём запись
     if str(chat.id) not in data["groups"]:
+        # Проверяем, что бот есть в группе (хотя бы участник)
         try:
             bot_member = await chat.get_member(context.bot.id)
             if bot_member.status in ("administrator", "member"):
                 get_group_settings(chat.id)
                 logging.info(f"Автоматическая регистрация группы {chat.id}")
-        except Exception as e:
-            logging.warning(f"Не удалось автоматически зарегистрировать группу {chat.id}: {e}")
+        except:
+            pass
+
+    # Если группа всё ещё не зарегистрирована, игнорируем
+    if str(chat.id) not in data["groups"]:
+        return
 
     settings = get_group_settings(chat.id)
     settings["stats"]["messages"] += 1
@@ -348,52 +352,56 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
 # ---------- КОМАНДЫ ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Привет! Я бот-защитник чатов.\n"
-        "Добавьте меня в группу и назначьте администратором.\n\n"
-        "Если бот уже в группе, отправьте команду /register в этой группе (только для администраторов).\n"
-        "После регистрации используйте /menu для настройки."
+        "👋 Привет! Я бот-защитник чатов.\n\n"
+        "Добавьте меня в группу и назначьте администратором с правом «Блокировка пользователей».\n"
+        "Затем используйте команду /addgroup в этой группе (только для администраторов).\n\n"
+        "После добавления группы настройте её через /menu в личных сообщениях.\n\n"
+        "Команды:\n"
+        "/menu – управление группами\n"
+        "/addgroup – добавить текущую группу (только в группах)\n"
+        "/admin – админ-панель (только для администраторов бота)"
     )
 
-async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Регистрирует текущую группу (только для администраторов)."""
+async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Добавляет текущую группу в список управляемых (только для администраторов группы)."""
     chat = update.effective_chat
     user = update.effective_user
     if not chat or chat.type not in ("group", "supergroup"):
         await update.message.reply_text("Эта команда работает только в группах.")
         return
     if not await is_admin(chat.id, user.id, context):
-        await update.message.reply_text("⛔ Только администраторы группы могут зарегистрировать бота.")
+        await update.message.reply_text("⛔ Только администраторы группы могут добавить бота.")
         return
 
-    # Проверяем, есть ли бот в группе и права
+    # Проверяем, что бот есть в группе и имеет права
     try:
         bot_member = await chat.get_member(context.bot.id)
         if bot_member.status not in ("administrator", "member"):
             await update.message.reply_text("❌ Бот не является участником этой группы. Добавьте его сначала.")
             return
         if not bot_member.can_restrict_members:
-            await update.message.reply_text("⚠️ Бот не имеет прав на ограничение участников. Пожалуйста, назначьте его администратором с правом «Блокировка пользователей».")
+            await update.message.reply_text("⚠️ Бот не имеет прав на ограничение участников. Назначьте его администратором с правом «Блокировка пользователей».")
             return
     except Exception as e:
         await update.message.reply_text(f"❌ Не удалось проверить права бота: {e}")
         return
 
-    # Регистрируем группу
+    # Добавляем группу
     get_group_settings(chat.id)
-    await update.message.reply_text(f"✅ Группа {chat.title or chat.id} зарегистрирована! Теперь вы можете настроить её через /menu в личных сообщениях.")
+    await update.message.reply_text(f"✅ Группа {chat.title or chat.id} добавлена! Теперь настройте её через /menu в личных сообщениях.")
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     groups = data["groups"]
-
-    # Не удаляем группы автоматически, чтобы не потерять только что зарегистрированную
-    # clean_invalid_groups(context) – убрали
+    clean_invalid_groups(context)  # очищаем неактивные
 
     if not groups:
         await update.message.reply_text(
-            "Вы ещё не добавили меня ни в одну группу.\n"
-            "Добавьте бота в группу и назначьте администратором.\n"
-            "Затем в группе отправьте команду /register (только для администраторов)."
+            "У меня нет добавленных групп.\n\n"
+            "Чтобы добавить группу:\n"
+            "1. Добавьте бота в группу и назначьте администратором.\n"
+            "2. В группе отправьте команду /addgroup (только для администраторов).\n\n"
+            "После этого группа появится здесь для настройки."
         )
         return
 
@@ -409,7 +417,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(title, callback_data=f"group_{chat_id_str}")])
 
     if not keyboard:
-        await update.message.reply_text("Нет доступных групп. Убедитесь, что бот добавлен в группу и она зарегистрирована.")
+        await update.message.reply_text("Нет активных групп. Возможно, бот вышел из всех групп.")
         return
 
     if user_id in data.get("admins", []):
@@ -948,7 +956,7 @@ def main():
     # Команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", menu))
-    application.add_handler(CommandHandler("register", register))
+    application.add_handler(CommandHandler("addgroup", addgroup))
     application.add_handler(CommandHandler("addadmin", add_admin))
     application.add_handler(CommandHandler("deladmin", del_admin))
 
