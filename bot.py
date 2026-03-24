@@ -250,9 +250,11 @@ def is_flooding(user_id: int, chat_id: int) -> bool:
 async def is_group_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
-        return member.status in ("administrator", "creator")
+        is_admin = member.status in ("administrator", "creator")
+        logging.info(f"Проверка админа: чат={chat_id}, пользователь={user_id}, статус={member.status}, результат={is_admin}")
+        return is_admin
     except Exception as e:
-        logging.warning(f"Ошибка проверки админа {user_id} в {chat_id}: {e}")
+        logging.error(f"Ошибка проверки админа {user_id} в {chat_id}: {e}", exc_info=True)
         return False
 
 async def get_group_owner(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
@@ -296,20 +298,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if chat.type in ("group", "supergroup"):
-        # Если группа не зарегистрирована, игнорируем сообщение
         settings = get_group_settings(chat.id)
         if not settings:
             return
 
-        # Статистика сообщений
         settings["stats"]["messages"] += 1
         update_group_setting(chat.id, "stats", settings["stats"])
 
-        # Пропускаем администраторов
         if await is_group_admin(chat.id, user.id, context):
             return
 
-        # Проверка прав бота (только если он администратор и имеет право блокировать)
         try:
             bot_member = await chat.get_member(context.bot.id)
             if bot_member.status != "administrator" or not bot_member.can_restrict_members:
@@ -317,7 +315,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             return
 
-        # Антифлуд
         if is_flooding(user.id, chat.id):
             await restrict_user(chat.id, user.id, settings["flood_mute"], "Флуд", context)
             try:
@@ -326,7 +323,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Блокировка ссылок
         if settings.get("block_links", True) and message.text and contains_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
             try:
@@ -335,7 +331,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Инвайт-ссылки
         if settings.get("invite_links_block", True) and message.text and contains_invite_link(message.text):
             await restrict_user(chat.id, user.id, 60, "Запрещённые инвайт-ссылки", context)
             try:
@@ -344,7 +339,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # CAPS
         if settings.get("caps_filter", False) and message.text:
             threshold = settings.get("caps_threshold", 70)
             if is_caps_abuse(message.text, threshold):
@@ -355,7 +349,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
                 return
 
-        # Блокировка медиа
         if settings.get("block_media", False) and any((message.photo, message.video, message.document,
                                                        message.voice, message.audio, message.animation, message.sticker)):
             await restrict_user(chat.id, user.id, 60, "Медиафайлы запрещены", context)
@@ -365,7 +358,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # Отправка файлов на проверку
         if settings.get("check_files", False) and message.document:
             await message.reply_text("📁 Файл отправлен на проверку")
             await message.delete()
@@ -375,7 +367,6 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
     chat = update.effective_chat
     for member in update.message.new_chat_members:
         if member.id == context.bot.id:
-            # Бот добавлен – даём инструкцию по добавлению группы
             await update.message.reply_text(
                 "🤖 *Бот-защитник активирован!*\n\n"
                 "Для добавления этой группы в систему:\n"
@@ -386,7 +377,6 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
             )
             return
 
-    # Кастомное приветствие (если настроено)
     settings = get_group_settings(chat.id)
     if settings and settings.get("custom_welcome"):
         for member in update.message.new_chat_members:
@@ -395,7 +385,6 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
 
 # ---------- ДОБАВЛЕНИЕ ГРУППЫ ----------
 async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для добавления текущей группы (только для администраторов)."""
     chat = update.effective_chat
     user = update.effective_user
 
@@ -403,18 +392,16 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Эта команда работает только в группах.")
         return
 
-    # Проверяем, что пользователь администратор группы
     if not await is_group_admin(chat.id, user.id, context):
         await update.message.reply_text("⛔ Только администраторы группы могут добавить бота.")
         return
 
-    # Проверяем, что бот есть в группе и имеет права
     try:
         bot_member = await chat.get_member(context.bot.id)
         if bot_member.status != "administrator":
             await update.message.reply_text(
                 "❌ Бот не является администратором.\n"
-                "Назначьте его администратором в настройках группы (все права не обязательны, но нужно включить «Удаление сообщений» и «Блокировка пользователей»)."
+                "Назначьте его администратором в настройках группы (нужны права на удаление сообщений и блокировку пользователей)."
             )
             return
         if not bot_member.can_restrict_members:
@@ -427,17 +414,14 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Не удалось проверить права бота: {e}")
         return
 
-    # Проверяем, не добавлена ли уже группа
     if get_group_data(chat.id):
         await update.message.reply_text("✅ Группа уже добавлена.")
         return
 
-    # Определяем владельца группы (creator)
     owner_id = await get_group_owner(chat.id, context)
     if not owner_id:
-        owner_id = user.id  # если не удалось определить, назначаем текущего админа
+        owner_id = user.id
 
-    # Создаём запись группы
     create_group(chat.id, owner_id)
     await update.message.reply_text(f"✅ Группа {chat.title or chat.id} добавлена! Владелец: {owner_id}")
 
@@ -498,7 +482,18 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_group_settings(query, chat_id: int):
     user_id = query.from_user.id
 
-    # Проверяем, что пользователь администратор группы
+    # Проверка, что бот является администратором группы
+    try:
+        bot_member = await query.message.get_bot().get_chat_member(chat_id, query.message.get_bot().id)
+        if bot_member.status != "administrator":
+            await query.answer("⚠️ Бот не является администратором группы. Назначьте его администратором и повторите попытку.", show_alert=True)
+            return
+    except Exception as e:
+        logging.error(f"Ошибка проверки прав бота в группе {chat_id}: {e}")
+        await query.answer("❌ Не удалось проверить права бота.", show_alert=True)
+        return
+
+    # Проверка, что пользователь администратор группы
     if not await is_group_admin(chat_id, user_id, query.message.get_bot()):
         await query.answer("⛔ Только администраторы группы могут настраивать бота.", show_alert=True)
         return
@@ -509,7 +504,6 @@ async def show_group_settings(query, chat_id: int):
         return
 
     owner_id = g["owner"]
-    # Тариф владельца группы определяет доступные функции
     owner_tariff = get_user_tariff(owner_id)
     allowed_features = TARIFF_FEATURES[owner_tariff]
     settings = g["settings"]
@@ -684,7 +678,6 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id == ADMIN_ID:
         text += "\n👑 *Вы являетесь главным администратором бота.*"
 
-    # Группы, где пользователь является администратором
     admin_groups = []
     for cid, g in data["groups"].items():
         try:
