@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -6,11 +7,13 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List
 
-from telegram import Update, ChatPermissions
+from telegram import Update, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -28,8 +31,6 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-    else:
-        data = {"groups": {}, "admins": [ADMIN_ID]}
 
 def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -49,7 +50,7 @@ def get_group_settings(chat_id: int):
             "stats": {"messages": 0, "violations": 0}
         }
         save_data()
-        logging.info(f"✅ Зарегистрирована группа {chat_id}")
+        logging.info(f"✅ Новая группа зарегистрирована: {chat_id}")
     return data["groups"][cid]
 
 # ---------- UTILS ----------
@@ -89,12 +90,9 @@ async def restrict_user(chat_id, user_id, duration, reason, context):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=datetime.now() + timedelta(seconds=duration)
         )
-        await context.bot.send_message(
-            chat_id,
-            f"🚫 Пользователь {user_id} ограничен на {duration} сек. Причина: {reason}"
-        )
+        await context.bot.send_message(chat_id, f"🚫 {user_id} мут {duration} сек ({reason})")
     except Exception as e:
-        logging.error(f"Ошибка мута: {e}")
+        logging.error(e)
 
 # ---------- CORE ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -105,8 +103,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not chat:
         return
 
-    logging.info(f"[CHAT] {chat.id} | {chat.type} | {chat.title}")
-
     # регистрация группы
     if chat.type in ("group", "supergroup"):
         if str(chat.id) not in data["groups"]:
@@ -114,8 +110,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 bot_member = await chat.get_member(context.bot.id)
                 if bot_member.status in ("administrator", "member"):
                     get_group_settings(chat.id)
-            except Exception as e:
-                logging.warning(f"Ошибка регистрации: {e}")
+            except:
+                pass
 
     if not user or user.is_bot:
         return
@@ -140,11 +136,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # антифлуд
     if is_flooding(user.id, chat.id):
         await restrict_user(chat.id, user.id, settings["flood_mute"], "Флуд", context)
-        if message:
-            try:
-                await message.delete()
-            except:
-                pass
+        try:
+            await message.delete()
+        except:
+            pass
         return
 
     if message and message.text:
@@ -152,55 +147,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if settings["block_links"] and contains_link(text):
             await restrict_user(chat.id, user.id, 60, "Ссылка", context)
-            try:
-                await message.delete()
-            except:
-                pass
+            await message.delete()
             return
 
         if settings["invite_links_block"] and contains_invite_link(text):
             await restrict_user(chat.id, user.id, 60, "Инвайт", context)
-            try:
-                await message.delete()
-            except:
-                pass
+            await message.delete()
             return
 
         if settings["caps_filter"] and is_caps_abuse(text):
             await restrict_user(chat.id, user.id, 60, "CAPS", context)
-            try:
-                await message.delete()
-            except:
-                pass
+            await message.delete()
             return
 
-    if message and settings["block_media"]:
-        if any((message.photo, message.video, message.document,
-                message.voice, message.audio, message.animation, message.sticker)):
-            await restrict_user(chat.id, user.id, 60, "Медиа", context)
-            try:
-                await message.delete()
-            except:
-                pass
-
-# ---------- COMMANDS ----------
+# ---------- MENU ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Бот работает! Напиши в группе любое сообщение.")
+    await menu(update, context)
 
-async def my_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not data["groups"]:
-        await update.message.reply_text("Нет групп")
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    groups = data["groups"]
+
+    if not groups:
+        await update.message.reply_text(
+            "❌ Нет групп\n\nДобавь бота в группу и напиши там сообщение"
+        )
         return
 
-    text = "📋 Группы:\n\n"
-    for gid in data["groups"]:
-        try:
-            chat = await context.bot.get_chat(int(gid))
-            text += f"{chat.title} ({gid})\n"
-        except:
-            text += f"{gid}\n"
+    keyboard = []
+    for gid in groups:
+        keyboard.append([InlineKeyboardButton(f"Группа {gid}", callback_data=f"group_{gid}")])
 
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        "Выбери группу:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data.startswith("group_"):
+        chat_id = int(query.data.split("_")[1])
+        settings = get_group_settings(chat_id)
+
+        text = (
+            f"Группа: {chat_id}\n"
+            f"Сообщений: {settings['stats']['messages']}\n"
+            f"Нарушений: {settings['stats']['violations']}"
+        )
+
+        await query.edit_message_text(text)
 
 # ---------- MAIN ----------
 def main():
@@ -209,11 +205,11 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
-    # Сначала команды
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("mygroups", my_groups))
+    app.add_handler(CommandHandler("menu", menu))
 
-    # Потом сообщения
+    app.add_handler(CallbackQueryHandler(button_callback))
+
     app.add_handler(MessageHandler(filters.ALL, handle_message))
 
     print("🚀 Бот запущен")
