@@ -1,4 +1,4 @@
-=import asyncio
+import asyncio
 import json
 import logging
 import os
@@ -60,7 +60,7 @@ TARIFF_FEATURES = {
     }
 }
 
-# --- ОБНОВЛЕННЫЕ ПРОДАЮЩИЕ ОПИСАНИЯ ТАРИФОВ ---
+# --- ПРОДАЮЩЕЕ ОПИСАНИЕ ТАРИФОВ ---
 TARIFF_DESCRIPTIONS = {
     "free": (
         "🛡 *Базовый (Free)* — 0 руб.\n\n"
@@ -85,7 +85,7 @@ TARIFF_DESCRIPTIONS = {
         "💎 *Профессиональный (PRO)* — 199 руб./мес\n\n"
         "Максимальная защита и аналитика для топовых проектов:\n"
         "🚀 *Всё из Стандартного тарифа*\n"
-        "🚀 AI-модерация контента (нейросеть анализирует текст)\n"
+        "🚀 AI-модерация контента (в разработке)\n"
         "🚀 Расширенная статистика чата и нарушений\n"
         "🚀 Приоритетная поддержка и доступ к новым фичам\n\n"
         "_Автоматизируйте модерацию на 100%!_"
@@ -286,13 +286,13 @@ async def get_group_owner(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> O
         return None
 
 def parse_duration(text: str) -> int:
-    """Преобразует строку типа '5m', '2ч', '1д' в секунды."""
+    """УМНОЕ ПРЕОБРАЗОВАНИЕ ВРЕМЕНИ (м, ч, д, с) -> СЕКУНДЫ"""
     if not text:
-        return 60
+        return 3600  # 1 час по умолчанию
     text = text.strip().lower()
     match = re.match(r'(\d+)\s*([smhdсмчд])?', text)
     if not match:
-        return 60
+        return 3600
     num = int(match.group(1))
     unit = match.group(2)
     
@@ -300,7 +300,7 @@ def parse_duration(text: str) -> int:
     elif unit in ('m', 'м'): return num * 60
     elif unit in ('h', 'ч'): return num * 3600
     elif unit in ('d', 'д'): return num * 86400
-    else: return num * 60 # По умолчанию минуты
+    else: return num * 60 # По умолчанию считаем минуты
 
 async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -313,18 +313,13 @@ async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, 
         if settings:
             settings["stats"]["violations"] += 1
             settings["stats"]["history"].append({
-                "user": user_id,
-                "time": datetime.now().isoformat(),
-                "reason": reason,
-                "duration": duration
+                "user": user_id, "time": datetime.now().isoformat(),
+                "reason": reason, "duration": duration
             })
             if len(settings["stats"]["history"]) > 100:
                 settings["stats"]["history"] = settings["stats"]["history"][-100:]
             update_group_setting(chat_id, "stats", settings["stats"])
-        await context.bot.send_message(
-            chat_id,
-            f"🚫 Пользователь {user_id} получил ограничение на {duration} сек.\nПричина: {reason}"
-        )
+        await context.bot.send_message(chat_id, f"🚫 Пользователь {user_id} получил ограничение на {duration} сек.\nПричина: {reason}")
     except Exception as e:
         logging.error(f"Не удалось ограничить пользователя {user_id} в чате {chat_id}: {e}")
 
@@ -340,10 +335,8 @@ async def mute_user(chat_id: int, user_id: int, duration: int, reason: str, cont
         if settings:
             settings["stats"]["violations"] += 1
             settings["stats"]["history"].append({
-                "user": user_id,
-                "time": datetime.now().isoformat(),
-                "reason": reason,
-                "duration": duration
+                "user": user_id, "time": datetime.now().isoformat(),
+                "reason": reason, "duration": duration
             })
             if len(settings["stats"]["history"]) > 100:
                 settings["stats"]["history"] = settings["stats"]["history"][-100:]
@@ -353,7 +346,7 @@ async def mute_user(chat_id: int, user_id: int, duration: int, reason: str, cont
         elif duration >= 3600: dur_str = f"{duration//3600} ч."
         elif duration >= 60: dur_str = f"{duration//60} мин."
         else: dur_str = f"{duration} сек."
-        
+
         await context.bot.send_message(chat_id, f"🔇 Пользователь {user_id} получил мут на {dur_str}\nПричина: {reason}")
         return True
     except Exception as e:
@@ -365,16 +358,14 @@ async def unmute_user(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_
         await context.bot.restrict_chat_member(
             chat_id, user_id,
             permissions=ChatPermissions(
-                can_send_messages=True,
-                can_send_media_messages=True,
-                can_send_other_messages=True,
-                can_add_web_page_previews=True
+                can_send_messages=True, can_send_media_messages=True,
+                can_send_other_messages=True, can_add_web_page_previews=True
             )
         )
         await context.bot.send_message(chat_id, f"🔊 Пользователь {user_id} размучен.")
         return True
     except Exception as e:
-        logging.error(f"Не удалось размутить {user_id} в {chat_id}: {e}")
+        logging.error(f"Не удалось размутить {user_id}: {e}")
         return False
 
 async def ban_user(chat_id: int, user_id: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
@@ -385,17 +376,15 @@ async def ban_user(chat_id: int, user_id: int, reason: str, context: ContextType
         if settings:
             settings["stats"]["violations"] += 1
             settings["stats"]["history"].append({
-                "user": user_id,
-                "time": datetime.now().isoformat(),
-                "reason": reason,
-                "duration": 0
+                "user": user_id, "time": datetime.now().isoformat(),
+                "reason": reason, "duration": 0
             })
             if len(settings["stats"]["history"]) > 100:
                 settings["stats"]["history"] = settings["stats"]["history"][-100:]
             update_group_setting(chat_id, "stats", settings["stats"])
         return True
     except Exception as e:
-        logging.error(f"Не удалось забанить {user_id} в {chat_id}: {e}")
+        logging.error(f"Не удалось забанить {user_id}: {e}")
         return False
 
 async def unban_user(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -404,70 +393,35 @@ async def unban_user(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_T
         await context.bot.send_message(chat_id, f"✅ Пользователь {user_id} разбанен.")
         return True
     except Exception as e:
-        logging.error(f"Не удалось разбанить {user_id} в {chat_id}: {e}")
+        logging.error(f"Не удалось разбанить {user_id}: {e}")
         return False
 
-async def add_warning(chat_id: int, user_id: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
-    settings = get_group_settings(chat_id)
-    if not settings: return 0
-    warnings = settings.get("warnings", {})
-    user_warns = warnings.get(str(user_id), [])
-    now = datetime.now()
-    user_warns = [w for w in user_warns if datetime.fromisoformat(w["time"]) > now - timedelta(days=7)]
-    user_warns.append({"time": now.isoformat(), "reason": reason})
-    if len(user_warns) > 10: user_warns = user_warns[-10:]
-    warnings[str(user_id)] = user_warns
-    settings["warnings"] = warnings
-    update_group_setting(chat_id, "warnings", warnings)
-
-    await context.bot.send_message(
-        chat_id,
-        f"⚠️ Пользователь {user_id} получил предупреждение.\nПричина: {reason}\nВсего предупреждений: {len(user_warns)}"
-    )
-
-    if len(user_warns) >= 3:
-        await mute_user(chat_id, user_id, 3600, "3 предупреждения (автоматический мут)", context)
-        warnings[str(user_id)] = []
-        settings["warnings"] = warnings
-        update_group_setting(chat_id, "warnings", warnings)
-        await context.bot.send_message(chat_id, f"⚠️ Пользователь {user_id} получил мут на 1 час из‑за трёх предупреждений.")
-    return len(user_warns)
-
-async def get_warnings(chat_id: int, user_id: int) -> int:
-    settings = get_group_settings(chat_id)
-    if not settings: return 0
-    warnings = settings.get("warnings", {})
-    user_warns = warnings.get(str(user_id), [])
-    now = datetime.now()
-    user_warns = [w for w in user_warns if datetime.fromisoformat(w["time"]) > now - timedelta(days=7)]
-    return len(user_warns)
-
-# --- НОВАЯ ФУНКЦИЯ ОБРАБОТКИ ТЕКСТОВЫХ КОМАНД АДМИНА ---
 async def process_admin_text_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ОБРАБОТКА ТЕКСТОВЫХ КОМАНД АДМИНА ЧЕРЕЗ ОТВЕТ НА СООБЩЕНИЕ (*мут 2ч, *бан)"""
     message = update.effective_message
     chat_id = update.effective_chat.id
-    text = message.text.lower()
     target_user = message.reply_to_message.from_user
 
     if target_user.is_bot:
         return
 
-    parts = text.split()
-    cmd = parts[0]
+    parts = message.text.split()
+    cmd = parts[0].lower()
 
     try:
         if cmd == '*мут':
             if len(parts) > 1 and parts[1][0].isdigit():
                 duration = parse_duration(parts[1])
-                reason = " ".join(parts[2:]) if len(parts) > 2 else "Нарушение правил"
+                reason = " ".join(parts[2:]) if len(parts) > 2 else "Нарушение правил (решение админа)"
             else:
-                duration = 3600
-                reason = " ".join(parts[1:]) if len(parts) > 1 else "Нарушение правил"
+                duration = 3600  # по умолчанию 1 час
+                reason = " ".join(parts[1:]) if len(parts) > 1 else "Нарушение правил (решение админа)"
+            
             await mute_user(chat_id, target_user.id, duration, reason, context)
-            await message.delete()
+            await message.delete()  # Удаляем сообщение с командой
 
         elif cmd == '*бан':
-            reason = " ".join(parts[1:]) if len(parts) > 1 else "Нарушение правил"
+            reason = " ".join(parts[1:]) if len(parts) > 1 else "Нарушение правил (решение админа)"
             await ban_user(chat_id, target_user.id, reason, context)
             await message.delete()
 
@@ -478,7 +432,7 @@ async def process_admin_text_command(update: Update, context: ContextTypes.DEFAU
         elif cmd == '*размут':
             await unmute_user(chat_id, target_user.id, context)
             await message.delete()
-            
+
     except Exception as e:
         logging.error(f"Ошибка текстовой команды админа: {e}")
 
@@ -507,7 +461,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if text_lower.startswith(('*мут', '*бан', '*размут', '*разбан')):
                 if await is_group_admin(chat.id, user.id, context):
                     await process_admin_text_command(update, context)
-                    return
+                    return # Прерываем дальнейшую проверку антиспамом
 
         if await is_group_admin(chat.id, user.id, context):
             return
@@ -521,7 +475,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         g = get_group_data(chat.id)
         owner_tariff = get_user_tariff(g["owner"])
-        
         if TARIFF_FEATURES[owner_tariff].get("strict_flood", False):
             if is_flooding(user.id, chat.id, strict=True):
                 await restrict_user(chat.id, user.id, settings.get("strict_flood_mute", 600), "Строгий флуд (9/3)", context)
@@ -597,7 +550,7 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not await is_group_admin(chat.id, user.id, context):
-        await update.message.reply_text("⛔ Только администраторы ��руппы могут добавить бота.")
+        await update.message.reply_text("⛔ Только администраторы группы могут добавить бота.")
         return
 
     try:
@@ -641,17 +594,14 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
 
     if edit_message and chat_id and message_id:
         await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
+            chat_id=chat_id, message_id=message_id,
             text="👋 *Главное меню*\nВыберите действие:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
+            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
         )
     else:
         await update.message.reply_text(
             "👋 *Главное меню*\nВыберите действие:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
+            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
         )
 
 # ---------- МЕНЮ В ГРУППЕ ----------
@@ -669,7 +619,7 @@ async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     g = get_group_data(chat.id)
     if not g:
-        await update.message.reply_text("⚠️ Группа не добавлена. Введите /addgroup.")
+        await update.message.reply_text("⚠️ Группа не добавлена в систему.\nОтправьте команду /addgroup.")
         return
 
     settings = g["settings"]
@@ -678,7 +628,7 @@ async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     allowed_features = TARIFF_FEATURES[owner_tariff]
 
     text = (
-        f"🛡 *Управление защи��ой группы*\n\n"
+        f"🛡 *Управление защитой группы*\n\n"
         f"*Группа:* {chat.title or chat.id}\n"
         f"*Тариф владельца:* {owner_tariff.upper()}\n"
         f"*Антиспам:* {settings['flood_limit']} сообщ. за {settings['flood_window']} сек → мут {settings['flood_mute']} сек\n"
@@ -703,7 +653,7 @@ async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("🔠 CAPS порог", callback_data=f"group_caps_threshold_{chat.id}")])
         keyboard.append([InlineKeyboardButton("🔠 CAPS: Вкл/Выкл", callback_data=f"group_toggle_caps_{chat.id}")])
     else:
-        keyboard.append([InlineKeyboardButton("🔒 CAPS (требуется PRO/STD)", callback_data="noop")])
+        keyboard.append([InlineKeyboardButton("🔒 CAPS (требуется платный тариф владельца)", callback_data="noop")])
 
     keyboard.append([InlineKeyboardButton("🔗 Ссылки: Вкл/Выкл", callback_data=f"group_toggle_links_{chat.id}")])
     keyboard.append([InlineKeyboardButton("🚫 Инвайт-ссылки: Вкл/Выкл", callback_data=f"group_toggle_invite_{chat.id}")])
@@ -711,17 +661,17 @@ async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if allowed_features["block_media"]:
         keyboard.append([InlineKeyboardButton("📷 Медиа: Вкл/Выкл", callback_data=f"group_toggle_media_{chat.id}")])
     else:
-        keyboard.append([InlineKeyboardButton("🔒 Медиа (требуется PRO/STD)", callback_data="noop")])
+        keyboard.append([InlineKeyboardButton("🔒 Медиа (требуется платный тариф владельца)", callback_data="noop")])
 
     if allowed_features["custom_welcome"]:
         keyboard.append([InlineKeyboardButton("✏️ Кастомное приветствие", callback_data=f"group_set_welcome_{chat.id}")])
     else:
-        keyboard.append([InlineKeyboardButton("🔒 Приветствие (требуется PRO/STD)", callback_data="noop")])
+        keyboard.append([InlineKeyboardButton("🔒 Приветствие (требуется платный тариф владельца)", callback_data="noop")])
 
     if allowed_features["check_files"]:
         keyboard.append([InlineKeyboardButton("📁 Проверка файлов: Вкл/Выкл", callback_data=f"group_toggle_files_{chat.id}")])
     else:
-        keyboard.append([InlineKeyboardButton("🔒 Проверка файлов (требуется PRO/STD)", callback_data="noop")])
+        keyboard.append([InlineKeyboardButton("🔒 Проверка файлов (требуется платный тариф владельца)", callback_data="noop")])
 
     if owner_tariff == "pro":
         keyboard.append([InlineKeyboardButton("📊 Расширенная статистика", callback_data=f"group_stats_{chat.id}")])
@@ -732,35 +682,22 @@ async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def group_anti_spam_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     query = update.callback_query
     settings = get_group_settings(chat_id)
-    if not settings:
-        await query.answer("Группа не найдена", show_alert=True)
-        return
+    if not settings: return
 
     g = get_group_data(chat_id)
     owner_tariff = get_user_tariff(g["owner"])
     is_advanced = TARIFF_FEATURES[owner_tariff].get("strict_flood", False)
 
-    text = (
-        f"*Настройка антиспама*\n"
-        f"Базовый лимит: {settings['flood_limit']} сообщений за {settings['flood_window']} сек\n"
-        f"Длительность мута: {settings['flood_mute']} сек\n"
-    )
+    text = f"*Настройка антиспама*\nБазовый лимит: {settings['flood_limit']} сообщений за {settings['flood_window']} сек\nДлительность мута: {settings['flood_mute']} сек\n"
     if is_advanced:
-        text += (
-            f"\n*Строгий режим (9/3):*\n"
-            f"Лимит: {settings.get('strict_flood_limit', 9)} сообщ. за {settings.get('strict_flood_window', 3)} сек\n"
-            f"Мут: {settings.get('strict_flood_mute', 600)} сек\n"
-        )
+        text += f"\n*Строгий режим (9/3):*\nЛимит: {settings.get('strict_flood_limit', 9)} сообщ. за {settings.get('strict_flood_window', 3)} сек\nМут: {settings.get('strict_flood_mute', 600)} сек\n"
+    
     keyboard = [
-        [InlineKeyboardButton("📈 +1 лимит", callback_data=f"group_limit_inc_{chat_id}"),
-         InlineKeyboardButton("📉 -1 лимит", callback_data=f"group_limit_dec_{chat_id}")],
-        [InlineKeyboardButton("⏱ +5 сек", callback_data=f"group_window_inc_{chat_id}"),
-         InlineKeyboardButton("⏱ -5 сек", callback_data=f"group_window_dec_{chat_id}")],
-        [InlineKeyboardButton("🔇 +30 сек мута", callback_data=f"group_mute_inc_{chat_id}"),
-         InlineKeyboardButton("🔊 -30 сек мута", callback_data=f"group_mute_dec_{chat_id}")],
+        [InlineKeyboardButton("📈 +1", callback_data=f"group_limit_inc_{chat_id}"), InlineKeyboardButton("📉 -1", callback_data=f"group_limit_dec_{chat_id}")],
+        [InlineKeyboardButton("⏱ +5 сек", callback_data=f"group_window_inc_{chat_id}"), InlineKeyboardButton("⏱ -5 сек", callback_data=f"group_window_dec_{chat_id}")],
+        [InlineKeyboardButton("🔇 +30 сек мута", callback_data=f"group_mute_inc_{chat_id}"), InlineKeyboardButton("🔊 -30 сек мута", callback_data=f"group_mute_dec_{chat_id}")],
     ]
-    if is_advanced:
-        keyboard.append([InlineKeyboardButton("🔧 Настроить строгий антиспам", callback_data=f"group_strict_anti_spam_{chat_id}")])
+    if is_advanced: keyboard.append([InlineKeyboardButton("🔧 Настроить строгий антиспам", callback_data=f"group_strict_anti_spam_{chat_id}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"group_back_{chat_id}")])
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -768,16 +705,11 @@ async def group_strict_anti_spam_menu(update: Update, context: ContextTypes.DEFA
     query = update.callback_query
     settings = get_group_settings(chat_id)
     if not settings: return
-    text = (
-        f"*Настройка строгого антиспама*\n"
-        f"Лимит: {settings.get('strict_flood_limit', 9)} сообщений\n"
-        f"Окно: {settings.get('strict_flood_window', 3)} сек\n"
-        f"Длительность мута: {settings.get('strict_flood_mute', 600)} сек\n"
-    )
+    text = f"*Настройка строгого антиспама*\nЛимит: {settings.get('strict_flood_limit', 9)} сообщений\nОкно: {settings.get('strict_flood_window', 3)} сек\nМут: {settings.get('strict_flood_mute', 600)} сек\n"
     keyboard = [
         [InlineKeyboardButton("📈 +1", callback_data=f"group_strict_limit_inc_{chat_id}"), InlineKeyboardButton("📉 -1", callback_data=f"group_strict_limit_dec_{chat_id}")],
         [InlineKeyboardButton("⏱ +5 сек", callback_data=f"group_strict_window_inc_{chat_id}"), InlineKeyboardButton("⏱ -5 сек", callback_data=f"group_strict_window_dec_{chat_id}")],
-        [InlineKeyboardButton("🔇 +60с мут", callback_data=f"group_strict_mute_inc_{chat_id}"), InlineKeyboardButton("🔊 -60с мут", callback_data=f"group_strict_mute_dec_{chat_id}")],
+        [InlineKeyboardButton("🔇 +60 сек мута", callback_data=f"group_strict_mute_inc_{chat_id}"), InlineKeyboardButton("🔊 -60 сек мута", callback_data=f"group_strict_mute_dec_{chat_id}")],
         [InlineKeyboardButton("🔙 Назад", callback_data=f"group_anti_spam_{chat_id}")]
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -785,7 +717,6 @@ async def group_strict_anti_spam_menu(update: Update, context: ContextTypes.DEFA
 async def group_caps_threshold_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     query = update.callback_query
     settings = get_group_settings(chat_id)
-    if not settings: return
     current = settings.get("caps_threshold", 70)
     text = f"*Настройка порога CAPS*\nТекущий порог: {current}%\nВыберите новый порог:"
     keyboard = [[InlineKeyboardButton(f"{t}%", callback_data=f"group_select_caps_{t}_{chat_id}")] for t in [10, 30, 50, 70, 100]]
@@ -799,21 +730,14 @@ async def group_set_caps_threshold(update: Update, context: ContextTypes.DEFAULT
 
 async def group_toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, setting: str, chat_id: int):
     query = update.callback_query
-    if not await is_group_admin(chat_id, query.from_user.id, context): return
-    g = get_group_data(chat_id)
-    owner_tariff = get_user_tariff(g["owner"])
-    if not TARIFF_FEATURES[owner_tariff].get(setting, False):
-        await query.answer("❌ Функция недоступна на тарифе владельца.", show_alert=True)
-        return
     settings = get_group_settings(chat_id)
     new_val = not settings[setting]
     update_group_setting(chat_id, setting, new_val)
-    await query.answer(f"Настройка изменена")
+    await query.answer("Настройка изменена")
     await group_menu(update, context)
 
 async def group_change_flood_parameter(update: Update, context: ContextTypes.DEFAULT_TYPE, param: str, delta: int, chat_id: int):
     settings = get_group_settings(chat_id)
-    if not settings: return
     new_val = max(1, settings[param] + delta)
     update_group_setting(chat_id, param, new_val)
     await update.callback_query.answer(f"Изменено на {new_val}")
@@ -821,7 +745,6 @@ async def group_change_flood_parameter(update: Update, context: ContextTypes.DEF
 
 async def group_change_strict_parameter(update: Update, context: ContextTypes.DEFAULT_TYPE, param: str, delta: int, chat_id: int):
     settings = get_group_settings(chat_id)
-    if not settings: return
     new_val = max(1, settings.get(param, 0) + delta)
     update_group_setting(chat_id, param, new_val)
     await update.callback_query.answer(f"Изменено на {new_val}")
@@ -829,47 +752,40 @@ async def group_change_strict_parameter(update: Update, context: ContextTypes.DE
 
 async def group_set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     context.user_data["welcome_chat"] = chat_id
-    await update.callback_query.edit_message_text("Введите текст приветствия (или отправьте пустое сообщение для отключения):")
+    await update.callback_query.edit_message_text("Введите текст приветствия (или отправ��те пустое сообщение для отключения):")
 
 async def group_show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    query = update.callback_query
     g = get_group_data(chat_id)
     stats = g["settings"]["stats"]
-    text = f"*📊 Расширенная статистика*\nСообщений: {stats['messages']}\nНарушений: {stats['violations']}\n\nПоследние:"
-    for entry in stats.get("history", [])[-5:]:
+    text = f"*📊 Расширенная статистика*\nСообщений: {stats['messages']}\nНарушений: {stats['violations']}\n\nПоследние:\n"
+    for entry in stats.get("history", [])[-10:]:
         dt = datetime.fromisoformat(entry["time"]).strftime("%d.%m %H:%M")
-        text += f"\n• {dt} – {entry['reason']} ({entry['duration']}с)"
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data=f"group_back_{chat_id}")]]
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        text += f"• {dt} – {entry['reason']} ({entry['duration']}с)\n"
+    await update.callback_query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=f"group_back_{chat_id}")]]))
 
 async def group_back(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     await group_menu(update, context)
 
-# ---------- ЗАГЛУШКИ ДЛЯ ЛС И ПРОЧИХ КОМАНД ----------
+# ---------- ЗАГЛУШКИ ДЛЯ ОТСУТСТВУЮЩИХ ФУНКЦИЙ ИЗ ЛС ----------
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
     tariff = get_user_tariff(uid)
-    text = f"👤 *Ваш профиль*\n\nВаш ID: `{uid}`\nТекущий тариф: *{tariff.upper()}*"
+    text = f"👤 *Ваш профиль*\n\nВаш ID: `{uid}`\nВаш тариф: *{tariff.upper()}*"
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]))
+
+async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.edit_message_text("📋 Настройка групп теперь производится прямо в чате командой /group_menu", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]))
 
 async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     text = "💰 *Доступные тарифы:*\n\n" + "\n\n".join(TARIFF_DESCRIPTIONS.values())
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]))
 
-async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.edit_message_text("📋 Список ваших групп.\n(Настройте группы прямо в чате командой /group_menu)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]))
-
-# Команды модерации-заглушки (чтобы не было ошибок)
-async def cmd_mute(u, c): pass
-async def cmd_unmute(u, c): pass
-async def cmd_ban(u, c): pass
-async def cmd_unban(u, c): pass
-async def cmd_warn(u, c): pass
-async def cmd_warns(u, c): pass
-async def handle_text(u, c): pass
+async def show_tariff_info(u, c, t): await u.callback_query.answer("В разработке", show_alert=True)
+async def buy_tariff(u, c, t): await u.callback_query.answer("Оплата в разработке", show_alert=True)
+async def check_payment(u, c, i): await u.callback_query.answer("Проверка в разработке", show_alert=True)
 async def show_group_settings(q, chat_id, c): pass
 async def show_stats(u, c, chat_id): pass
 async def anti_spam_menu(u, c, chat_id): pass
@@ -879,20 +795,21 @@ async def set_caps_threshold(u, c, t, chat_id): pass
 async def toggle_setting(u, c, s, chat_id): pass
 async def change_flood_parameter(u, c, p, d, chat_id): pass
 async def change_strict_parameter(u, c, p, d, chat_id): pass
-async def show_tariff_info(u, c, t): pass
-async def buy_tariff(u, c, t): pass
-async def check_payment(u, c, i): pass
+async def cmd_mute(u, c): pass
+async def cmd_unmute(u, c): pass
+async def cmd_ban(u, c): pass
+async def cmd_unban(u, c): pass
+async def cmd_warn(u, c): pass
+async def cmd_warns(u, c): pass
+async def handle_text(u, c): pass
 
-# ---------- АДМИН-ПАНЕЛЬ (С НОВЫМИ ПЛЮШКАМИ) ----------
+# ---------- АДМИН-ПАНЕЛЬ (НОВЫЕ ПЛЮШКИ) ----------
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if update.effective_user.id != ADMIN_ID:
-        await query.edit_message_text("⛔ У вас нет доступа.")
-        return
+    if update.effective_user.id != ADMIN_ID: return
     keyboard = [
-        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"), InlineKeyboardButton("ℹ️ Инфо", callback_data="admin_group_info")],
-        [InlineKeyboardButton("👥 Пользователи", callback_data="admin_users")],
-        [InlineKeyboardButton("📥 Скачать ��экап базы", callback_data="admin_backup")],
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"), InlineKeyboardButton("👥 Пользователи", callback_data="admin_users")],
+        [InlineKeyboardButton("📥 Скачать бэкап базы", callback_data="admin_backup")],
         [InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
     ]
@@ -901,51 +818,57 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if update.effective_user.id != ADMIN_ID: return
-    text = "*👥 Последние пользователи:*\n"
+    text = "*👥 Пользователи бота:*\n"
     for uid, u in list(user_data.items())[:30]:
         text += f"• `{uid}` – {u['tariff'].upper()}\n"
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
 
 async def admin_stats(update, context):
     query = update.callback_query
-    await query.edit_message_text(f"📊 Всего групп в базе: {len(data['groups'])}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
+    await query.edit_message_text(f"📊 Всего групп: {len(data['groups'])}\nВсего юзеров: {len(user_data)}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
 
 async def admin_group_info_request(update, context):
     await update.callback_query.answer("Функция в разработке", show_alert=True)
 
 async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправка файлов базы данных владельцу в ЛС"""
     query = update.callback_query
     if update.effective_user.id != ADMIN_ID: return
     try:
-        if os.path.exists(DATA_FILE): await context.bot.send_document(chat_id=ADMIN_ID, document=open(DATA_FILE, 'rb'))
-        if os.path.exists(USER_DATA_FILE): await context.bot.send_document(chat_id=ADMIN_ID, document=open(USER_DATA_FILE, 'rb'))
-        await query.answer("Бэкапы отправлены!")
+        if os.path.exists(DATA_FILE):
+            await context.bot.send_document(chat_id=ADMIN_ID, document=open(DATA_FILE, 'rb'))
+        if os.path.exists(USER_DATA_FILE):
+            await context.bot.send_document(chat_id=ADMIN_ID, document=open(USER_DATA_FILE, 'rb'))
+        await query.answer("Бэкапы отправлены в ЛС!")
     except Exception as e:
-        await query.answer(f"Ошибка: {e}", show_alert=True)
+        await query.answer(f"Ошибка выгрузки: {e}", show_alert=True)
 
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Инструкция по рассылке"""
     query = update.callback_query
     if update.effective_user.id != ADMIN_ID: return
     await query.edit_message_text(
-        "📢 *Рассылка*\nДля отправки сообщения всем пользователям бота, напишите команду:\n\n`/broadcast Ваш текст`", 
+        "📢 *Рассылка*\n\nДля отправки сообщения всем пользователям бота, напишите команду:\n\n`/broadcast Ваш текст здесь`", 
         parse_mode="Markdown", 
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]])
     )
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сама команда рассылки (только для владельца)"""
     if update.effective_user.id != ADMIN_ID: return
     text = update.message.text.replace('/broadcast', '').strip()
     if not text:
-        await update.message.reply_text("Использование: /broadcast Текст")
+        await update.message.reply_text("Использование: /broadcast Текст рассылки")
         return
     count = 0
+    await update.message.reply_text("⏳ Рассылка начата...")
     for uid in user_data.keys():
         try:
             await context.bot.send_message(chat_id=int(uid), text=text)
             count += 1
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.05) # Защита от лимитов Telegram
         except: pass
-    await update.message.reply_text(f"✅ Рассылка завершена. Доставлено: {count}")
+    await update.message.reply_text(f"✅ Рассылка завершена! Доставлено: {count} пользователям.")
 
 # ---------- ОСНОВНОЙ CALLBACK ОБРАБОТЧИК ----------
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -955,7 +878,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data_cb == "main_menu":
         await show_main_menu(update, context, edit_message=True, chat_id=query.message.chat_id, message_id=query.message.message_id)
         return
-
     if data_cb == "groups": await show_groups(update, context); return
     if data_cb == "show_tariffs": await show_tariffs(update, context); return
     if data_cb == "profile": await show_profile(update, context); return
@@ -999,16 +921,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data_cb.startswith("group_strict_mute_inc_"): await group_change_strict_parameter(update, context, "strict_flood_mute", 60, int(data_cb.split("_")[4])); return
     if data_cb.startswith("group_strict_mute_dec_"): await group_change_strict_parameter(update, context, "strict_flood_mute", -60, int(data_cb.split("_")[4])); return
 
-    # Заглушки для старых кнопок ЛС (если они случайно нажмутся)
-    if data_cb.startswith(("anti_spam_", "strict_anti_spam_", "limit_inc_", "limit_dec_", "toggle_", "stats_")):
-        await query.answer("Управление теперь в группе: /group_menu", show_alert=True)
+    # Заглушка для старых кнопок
+    if data_cb.startswith(("anti_spam_", "strict_anti_spam_", "limit_inc_", "limit_dec_", "window_", "mute_", "caps_threshold_", "select_caps_", "toggle_", "set_welcome_", "stats_", "back_")):
+        await query.answer("Управление теперь осуществляется прямо в группе командой /group_menu", show_alert=True)
         return
 
     await query.answer("Действие не распознано", show_alert=False)
 
 # ---------- ЗАПУСК ----------
 def main():
-    logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=logging.INFO
+    )
     load_data()
 
     application = Application.builder().token(TOKEN).build()
@@ -1021,9 +946,8 @@ def main():
     application.add_handler(CommandHandler("menu", start))
     application.add_handler(CommandHandler("addgroup", addgroup))
     application.add_handler(CommandHandler("group_menu", group_menu))
-    application.add_handler(CommandHandler("broadcast", cmd_broadcast)) # Команда для рассылки
+    application.add_handler(CommandHandler("broadcast", cmd_broadcast)) # Команда рассылки
 
-    # Старые команды модерации
     application.add_handler(CommandHandler("mute", cmd_mute))
     application.add_handler(CommandHandler("unmute", cmd_unmute))
     application.add_handler(CommandHandler("ban", cmd_ban))
@@ -1031,9 +955,11 @@ def main():
     application.add_handler(CommandHandler("warn", cmd_warn))
     application.add_handler(CommandHandler("warns", cmd_warns))
 
-    application.add_handler(CallbackQueryHandler(button_callback))
+    # Обновленный Callback с поддержкой новых кнопок
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|groups|show_tariffs|profile|tariff_info_|buy_|admin_panel|admin_stats|admin_group_info|admin_users|admin_backup|admin_broadcast|group_|stats_|anti_spam_|strict_anti_spam_|limit_inc_|limit_dec_|window_inc_|window_dec_|mute_inc_|mute_dec_|strict_limit_inc_|strict_limit_dec_|strict_window_inc_|strict_window_dec_|strict_mute_inc_|strict_mute_dec_|caps_threshold_|select_caps_|toggle_links_|toggle_invite_|toggle_caps_|toggle_media_|toggle_files_|set_welcome_|check_payment_|group_anti_spam_|group_strict_anti_spam_|group_caps_threshold_|group_select_caps_|group_toggle_links_|group_toggle_invite_|group_toggle_caps_|group_toggle_media_|group_toggle_files_|group_set_welcome_|group_stats_|group_back_|group_limit_inc_|group_limit_dec_|group_window_inc_|group_window_dec_|group_mute_inc_|group_mute_dec_|group_strict_limit_inc_|group_strict_limit_dec_|group_strict_window_inc_|group_strict_window_dec_|group_strict_mute_inc_|group_strict_mute_dec_|noop)"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    logging.info("✅ Бот запущен")
+    logging.info("✅ Бот запущен и готов к работе!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
