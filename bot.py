@@ -747,9 +747,9 @@ async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "*Доступные тарифы и услуги:*\n\n" + "\n\n".join(TARIFF_DESCRIPTIONS.values())
     keyboard = [
         [InlineKeyboardButton("🆓 Бесплатный", callback_data="tariff_info_free")],
+        [InlineKeyboardButton("🌟 VIP для пользователя (50 руб)", callback_data="tariff_info_vip")],
         [InlineKeyboardButton("⭐ Стандартный (99 руб)", callback_data="tariff_info_standard")],
         [InlineKeyboardButton("💎 Профессиональный (199 руб)", callback_data="tariff_info_pro")],
-        [InlineKeyboardButton("🌟 VIP для пользователя (50 руб)", callback_data="tariff_info_vip")],
         [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
