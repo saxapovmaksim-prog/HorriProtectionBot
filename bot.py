@@ -29,53 +29,16 @@ PRICES_RUB = {"standard": 99, "pro": 199, "vip": 50}
 PRICES_USD = {"standard": 0.99, "pro": 1.99, "vip": 0.50}
 
 TARIFF_FEATURES = {
-    "free": {
-        "block_links": True, "block_media": False, "custom_welcome": False,
-        "check_files": False, "check_content": False, "caps_filter": False,
-        "invite_links_block": True, "strict_flood": False, "captcha": False
-    },
-    "standard": {
-        "block_links": True, "block_media": True, "custom_welcome": True,
-        "check_files": True, "check_content": False, "caps_filter": True,
-        "invite_links_block": True, "strict_flood": True, "captcha": True
-    },
-    "pro": {
-        "block_links": True, "block_media": True, "custom_welcome": True,
-        "check_files": True, "check_content": True, "caps_filter": True,
-        "invite_links_block": True, "strict_flood": True, "captcha": True
-    }
+    "free": {"block_links": True, "block_media": False, "custom_welcome": False, "check_files": False, "check_content": False, "caps_filter": False, "invite_links_block": True, "strict_flood": False, "captcha": False},
+    "standard": {"block_links": True, "block_media": True, "custom_welcome": True, "check_files": True, "check_content": False, "caps_filter": True, "invite_links_block": True, "strict_flood": True, "captcha": True},
+    "pro": {"block_links": True, "block_media": True, "custom_welcome": True, "check_files": True, "check_content": True, "caps_filter": True, "invite_links_block": True, "strict_flood": True, "captcha": True}
 }
 
 TARIFF_DESCRIPTIONS = {
-    "free": (
-        "🛡 *Базовый (Free)* — 0 руб.\n\n"
-        "Отличный старт. Включает:\n"
-        "🔹 Антиспам и антифлуд\n"
-        "🔹 Удаление ссылок и инвайтов"
-    ),
-    "standard": (
-        "⭐ *Стандартный (Standard)* — 99 руб./мес\n\n"
-        "Продвинутый контроль:\n"
-        "🔸 *Всё из Базового тарифа*\n"
-        "🔸 Капча при входе\n"
-        "🔸 Запрет на медиа и автоответчик (триггеры)\n"
-        "🔸 Кастомное приветствие и фильтр CAPS"
-    ),
-    "pro": (
-        "💎 *Профессиональный (PRO)* — 199 руб./мес\n\n"
-        "Максимальная защита:\n"
-        "🚀 *Всё из Стандартного*\n"
-        "🚀 Проверка ссылок соцсетей админами\n"
-        "🚀 AI-модерация контента\n\n"
-        "_Идеально для топовых проектов!_"
-    ),
-    "vip": (
-        "🌟 *VIP-статус пользователя* — 50 руб./мес\n\n"
-        "Дает персональные привилегии во всех чатах бота:\n"
-        "🔸 Полный обход капчи при входе (сразу в чат)\n"
-        "🔸 Увеличенные лимиты на сообщения (х2)\n"
-        "🔸 Отличительная отметка в профиле"
-    )
+    "free": ("🛡 *Базовый (Free)* — 0 руб.\n\nОтличный старт. Включает:\n🔹 Антиспам и антифлуд\n🔹 Удаление ссылок и инвайтов"),
+    "standard": ("⭐ *Стандартный (Standard)* — 99 руб./мес\n\nПродвинутый контроль:\n🔸 *Всё из Базового тарифа*\n🔸 Капча при входе\n🔸 Запрет на медиа и автоответчик (триггеры)\n🔸 Кастомное приветствие и фильтр CAPS"),
+    "pro": ("💎 *Профессиональный (PRO)* — 199 руб./мес\n\nМаксимальная защита:\n🚀 *Всё из Стандартного*\n🚀 Проверка ссылок соцсетей админами\n🚀 AI-модерация контента"),
+    "vip": ("🌟 *VIP-статус пользователя* — 50 руб./мес\n\nДает персональные привилегии во всех чатах бота:\n🔸 Полный обход капчи при входе (сразу в чат)\n🔸 Увеличенные лимиты на сообщения (х2)\n🔸 Отличительная отметка в профиле")
 }
 
 DEFAULT_SETTINGS = {
@@ -83,15 +46,11 @@ DEFAULT_SETTINGS = {
     "strict_flood_limit": 9, "strict_flood_window": 3, "strict_flood_mute": 600,
     "block_links": True, "block_media": False, "custom_welcome": None,
     "check_files": False, "check_content": False, "caps_filter": False, "caps_threshold": 70,
-    "invite_links_block": True,
-    "captcha_enabled": False,
+    "invite_links_block": True, "captcha_enabled": False,
     "link_review": {"tg": False, "yt": False, "tt": False, "ig": False, "vk": False},
-    "whitelisted_links": {}, 
-    "triggers": {}, 
-    "seen_users": [],
+    "whitelisted_links": {}, "triggers": {}, "seen_users": [],
     "ai_enabled": False, "ai_prompt": "Ты модератор чата. Анализируй сообщения на токсичность и спам.", "ai_strictness": 50,
-    "stats": {"messages": 0, "violations": 0, "history": []},
-    "warnings": {}
+    "stats": {"messages": 0, "violations": 0, "history": []}, "warnings": {}
 }
 
 # ---------- ГЛОБАЛЬНЫЕ ДАННЫЕ ----------
@@ -123,7 +82,7 @@ def load_data():
             for uid in user_data:
                 user_data[uid].setdefault("is_vip", False)
                 user_data[uid].setdefault("vip_expiry", None)
-        except Exception as e: logging.error(f"Ошибка за��рузки юзеров: {e}"); user_data = {}
+        except Exception as e: logging.error(f"Ошибка загрузки юзеров: {e}"); user_data = {}
     else: user_data = {}
 
 def save_data():
@@ -137,7 +96,7 @@ def save_user_data():
     except Exception: pass
 
 def get_group_data(chat_id: int) -> Dict: return data["groups"].get(str(chat_id))
-def get_group_settings(chat_id: int) -> Dict: 
+def get_group_settings(chat_id: int) -> Dict:
     g = get_group_data(chat_id)
     return g["settings"] if g else None
 def update_group_setting(chat_id: int, key: str, value):
@@ -148,8 +107,8 @@ def register_user(user_id: int) -> Dict:
     uid = str(user_id)
     if uid not in user_data:
         user_data[uid] = {
-            "registered": datetime.now().isoformat(), 
-            "tariff": "pro" if user_id == ADMIN_ID else "free", 
+            "registered": datetime.now().isoformat(),
+            "tariff": "pro" if user_id == ADMIN_ID else "free",
             "expiry": None,
             "is_vip": True if user_id == ADMIN_ID else False,
             "vip_expiry": None
@@ -210,7 +169,7 @@ def is_flooding(user_id: int, chat_id: int, strict: bool = False, is_vip: bool =
     settings = get_group_settings(chat_id)
     if not settings: return False
     limit, window = (settings.get("strict_flood_limit", 9), settings.get("strict_flood_window", 3)) if strict else (settings["flood_limit"], settings["flood_window"])
-    if is_vip: limit *= 2 
+    if is_vip: limit *= 2
     timestamps = [ts for ts in user_messages[user_id] if ts > datetime.now() - timedelta(seconds=window)]
     user_messages[user_id] = timestamps
     timestamps.append(datetime.now())
@@ -253,11 +212,11 @@ async def mute_user(chat_id: int, user_id: int, duration: int, reason: str, cont
             s["stats"]["history"].append({"user": user_id, "time": datetime.now().isoformat(), "reason": reason, "duration": duration})
             s["stats"]["history"] = s["stats"]["history"][-100:]
             update_group_setting(chat_id, "stats", s["stats"])
-        
+
         d_str = f"{duration//86400} дн." if duration >= 86400 else f"{duration//3600} ч." if duration >= 3600 else f"{duration//60} мин." if duration >= 60 else f"{duration} сек."
         await context.bot.send_message(chat_id, f"🔇 Пользователь `{mask_id(user_id)}` получил мут на {d_str}\nПричина: {reason}", parse_mode="Markdown")
         return True
-    except Exception as e: return False
+    except Exception: return False
 
 async def unmute_user(chat_id, user_id, context):
     try:
@@ -281,7 +240,27 @@ async def unban_user(chat_id, user_id, context):
         await context.bot.send_message(chat_id, f"✅ Пользователь `{mask_id(user_id)}` разбанен.", parse_mode="Markdown")
     except Exception: pass
 
-# ---------- ТАЙМЕР КАПЧИ ----------
+async def add_warning(chat_id: int, user_id: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
+    s = get_group_settings(chat_id)
+    if not s: return 0
+    warns = s.setdefault("warnings", {}).setdefault(str(user_id), [])
+    warns = [w for w in warns if datetime.fromisoformat(w["time"]) > datetime.now() - timedelta(days=7)]
+    warns.append({"time": datetime.now().isoformat(), "reason": reason})
+    s["warnings"][str(user_id)] = warns[-10:]
+    update_group_setting(chat_id, "warnings", s["warnings"])
+    await context.bot.send_message(chat_id, f"⚠️ Пользователь `{mask_id(user_id)}` получил предупреждение.\nПричина: {reason}\nВсего: {len(warns)}", parse_mode="Markdown")
+    if len(warns) >= 3:
+        await mute_user(chat_id, user_id, 3600, "3 предупреждения (автомут)", context)
+        s["warnings"][str(user_id)] = []
+        update_group_setting(chat_id, "warnings", s["warnings"])
+    return len(warns)
+
+async def get_warnings(chat_id, user_id) -> int:
+    s = get_group_settings(chat_id)
+    if not s: return 0
+    warns = s.get("warnings", {}).get(str(user_id), [])
+    return len([w for w in warns if datetime.fromisoformat(w["time"]) > datetime.now() - timedelta(days=7)])
+    # ---------- ТАЙМЕР КАПЧИ ----------
 async def captcha_timer(chat_id: int, user_id: int, message_id: int, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.sleep(120)
     cid_str = str(chat_id)
@@ -292,6 +271,31 @@ async def captcha_timer(chat_id: int, user_id: int, message_id: int, context: Co
             await context.bot.unban_chat_member(chat_id, user_id) 
             await context.bot.delete_message(chat_id, message_id)
         except Exception: pass
+
+# ---------- ТЕКСТОВЫЕ КОМАНДЫ АДМИНА (*мут, *бан) ----------
+async def process_admin_text_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg, chat_id = update.effective_message, update.effective_chat.id
+    target = msg.reply_to_message.from_user
+    if target.is_bot: return
+    parts = msg.text.lower().split()
+    cmd = parts[0]
+    try:
+        if cmd == '*мут':
+            dur = parse_duration(parts[1]) if len(parts) > 1 and parts[1][0].isdigit() else 3600
+            rsn = " ".join(parts[2:]) if (len(parts) > 1 and parts[1][0].isdigit()) else " ".join(parts[1:])
+            await mute_user(chat_id, target.id, dur, rsn or "Нарушение правил", context)
+            await msg.delete()
+        elif cmd == '*бан':
+            await ban_user(chat_id, target.id, " ".join(parts[1:]) or "Нарушение правил", context)
+            await msg.delete()
+        elif cmd == '*размут':
+            await unmute_user(chat_id, target.id, context)
+            await context.bot.send_message(chat_id, f"🔊 Пользователь `{mask_id(target.id)}` размучен администратором.", parse_mode="Markdown")
+            await msg.delete()
+        elif cmd == '*разбан':
+            await unban_user(chat_id, target.id, context)
+            await msg.delete()
+    except Exception: pass
 
 # ---------- ЗАЩИТА СООБЩЕНИЙ ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -315,10 +319,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         settings["stats"]["messages"] += 1
         update_group_setting(chat.id, "stats", settings["stats"])
 
+        # Защита от обхода мута капчи
         if str(chat.id) in pending_captchas and user.id in pending_captchas[str(chat.id)]:
             try: await msg.delete()
             except: pass
             return
+
+        # Проверка на текстовые команды (*мут)
+        if msg.reply_to_message and msg.text and msg.text.lower().startswith(('*мут', '*бан', '*размут', '*разбан')):
+            if await is_group_admin(chat.id, user.id, context):
+                await process_admin_text_command(update, context)
+                return
 
         if await is_group_admin(chat.id, user.id, context): return
 
@@ -432,7 +443,71 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
         else:
             if settings.get("custom_welcome"):
                 await update.message.reply_text(settings["custom_welcome"].replace("{name}", member.full_name))
-                async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+# ---------- СТАНДАРТНЫЕ КОМАНДЫ МОДЕРАЦИИ ----------
+async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
+
+    if not context.args: return await update.message.reply_text("Использование: /mute @пользователь [время]")
+    
+    target, duration_str = None, None
+    if context.args[0].startswith('@'):
+        try: target = (await chat.get_member(context.args[0][1:])).user.id
+        except: return await update.message.reply_text("Пользователь не найден.")
+        if len(context.args) > 1: duration_str = context.args[1]
+    else:
+        try: target = int(context.args[0])
+        except: return await update.message.reply_text("Укажите пользователя (ID или @username).")
+        if len(context.args) > 1: duration_str = context.args[1]
+
+    if not target: return await update.message.reply_text("Пользователь не найден.")
+    duration = parse_duration(duration_str)
+    await mute_user(chat.id, target, duration, f"Команда /mute от {mask_id(user.id)}", context)
+
+async def cmd_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
+    if not context.args: return await update.message.reply_text("Использование: /unmute @пользователь")
+    try: target = (await chat.get_member(context.args[0][1:])).user.id if context.args[0].startswith('@') else int(context.args[0])
+    except: return
+    await unmute_user(chat.id, target, context)
+    await update.message.reply_text(f"🔊 Пользователь `{mask_id(target)}` размучен.", parse_mode="Markdown")
+
+async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
+    if not context.args: return await update.message.reply_text("Использование: /ban @пользователь")
+    try: target = (await chat.get_member(context.args[0][1:])).user.id if context.args[0].startswith('@') else int(context.args[0])
+    except: return
+    await ban_user(chat.id, target, f"Команда /ban от {mask_id(user.id)}", context)
+
+async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
+    if not context.args: return await update.message.reply_text("Использование: /unban ID_пользователя")
+    try: target = int(context.args[0])
+    except: return await update.message.reply_text("Укажите числовой ID пользователя.")
+    await unban_user(chat.id, target, context)
+
+async def cmd_warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
+    if not context.args: return await update.message.reply_text("Использование: /warn @пользователь [причина]")
+    try: target = (await chat.get_member(context.args[0][1:])).user.id if context.args[0].startswith('@') else int(context.args[0])
+    except: return
+    reason = " ".join(context.args[1:]) if len(context.args) > 1 else "Без указания причины"
+    await add_warning(chat.id, target, reason, context)
+
+async def cmd_warns(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
+    if not context.args: return await update.message.reply_text("Использование: /warns @пользователь")
+    try: target = (await chat.get_member(context.args[0][1:])).user.id if context.args[0].startswith('@') else int(context.args[0])
+    except: return
+    count = await get_warnings(chat.id, target)
+    await update.message.reply_text(f"📊 У пользователя `{mask_id(target)}` {count} предупреждений.", parse_mode="Markdown")
+async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat, user = update.effective_chat, update.effective_user
     if chat.type not in ("group", "supergroup"): return
     if not await is_group_admin(chat.id, user.id, context): return
@@ -538,7 +613,6 @@ async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, query=N
         [InlineKeyboardButton("📊 Статистика", callback_data=f"group_stats_{chat_id}")]
     ]
     
-    # Кнопки возврата / закрытия
     if query and query.message.chat.type == "private":
         keyboard.append([InlineKeyboardButton("🔙 К списку групп", callback_data="groups")])
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -762,13 +836,42 @@ async def admin_users(query, context):
         if len(text) > 3500: text += "..."; break
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
 
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    text = update.message.text.replace('/broadcast', '').strip()
+    if not text: return await update.message.reply_text("Использование: /broadcast Текст")
+    await update.message.reply_text("⏳ Рассылка начата...")
+    count = 0
+    for uid in list(user_data.keys()):
+        try: await context.bot.send_message(chat_id=int(uid), text=text); count += 1; await asyncio.sleep(0.05)
+        except: pass
+    await update.message.reply_text(f"✅ Доставлено: {count} пользователям.")
+
 # ---------- ОБРАБОТЧИКИ ТЕКСТА (ВВОД) ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg, user_id = update.message, update.effective_user.id
     if not msg or not msg.text: return
     state = user_states.get(user_id)
     
-    # Добавлен��е триггера
+    if user_id == ADMIN_ID and state == "await_find_group":
+        del user_states[user_id]
+        try:
+            chat_id = int(msg.text.strip())
+            chat_obj = await context.bot.get_chat(chat_id)
+            admins = await context.bot.get_chat_administrators(chat_id)
+            g = get_group_data(chat_id)
+            seen = g["settings"].get("seen_users", []) if g else []
+            owner = next((a.user.id for a in admins if a.status == "creator"), None)
+            
+            text = f"📊 *Группа:* {chat_obj.title} (`{chat_id}`)\n👑 *Владелец:* `{mask_id(owner)}`\n\n🛡 *Админы:*\n"
+            for a in admins: text += f"- {a.user.full_name} (`{mask_id(a.user.id)}`)\n"
+            text += f"\n👥 *Участников в базе: {len(seen)}*\n"
+            for u in seen[:30]: text += f"- `{mask_id(u)}`\n" 
+            if len(seen) > 30: text += f"...и еще {len(seen)-30}"
+            await msg.reply_text(text, parse_mode="Markdown")
+        except Exception as e: await msg.reply_text(f"❌ Ошибка поиска: {e}")
+        return
+
     if msg.chat.type == "private" and state and state.startswith("await_trigger_"):
         chat_id = int(state.split("_")[2])
         if "::" not in msg.text:
@@ -785,7 +888,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(f"✅ Триггер добавлен!\nЕсли напишут `{word}`, бот ответит: `{reply}`")
         return
 
-    # Остальные обработчики (ИИ, Приветствие)
     if state and state.startswith("await_ai_prompt_"):
         chat_id = int(state.split("_")[3])
         del user_states[user_id]
@@ -821,7 +923,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
         return
 
-    # -- КАПЧА ПРОХОЖДЕНИЕ --
     if d.startswith("captcha_"):
         parts = d.split("_")
         chat_id, target_uid = int(parts[1]), int(parts[2])
@@ -838,11 +939,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: await q.answer("Время вышло или проверка уже пройдена.", show_alert=True)
         return
 
-    # -- Главное меню и оплаты --
     if d == "main_menu": await show_main_menu(update, context, True, q.message.chat_id, q.message.message_id); return
     if d == "profile": await show_profile(update, context); return
     if d == "groups": await show_groups(update, context); return
     if d == "show_tariffs": await show_tariffs(update, context); return
+    if d == "buy_vip": await buy_tariff(q, "vip", context); return
     if d.startswith("tariff_info_"): await show_tariff_info(q, d.split("_")[2], context); return
     if d.startswith("buy_"): await buy_tariff(q, d.split("_")[1], context); return
     if d.startswith("check_payment_"): await check_payment(q, d.split("_")[2], context); return
@@ -852,8 +953,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d == "admin_users": await admin_users(q, context); return
     if d == "admin_find_group" and uid == ADMIN_ID:
         user_states[uid] = "await_find_group"; await q.message.reply_text("🔍 Введите ID группы:"); await q.answer(); return
+    if d == "admin_broadcast" and uid == ADMIN_ID:
+        return await q.edit_message_text("📢 Напишите `/broadcast Ваш текст`", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="admin_panel")]]))
 
-    # -- Проверка ссылок --
     if d.startswith("aprv_"):
         lid = d.split("_")[1]
         if lid in pending_reviews:
@@ -881,7 +983,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(f"✅ Наказано.")
         return
 
-    # -- Групповые меню навигация --
     if d.startswith("group_main_"): await group_menu(update, context, q, int(d.split("_")[2])); return
     if d.startswith("group_anti_spam_"): await group_anti_spam_menu(q, int(d.split("_")[3]), context); return
     if d.startswith("group_strict_anti_spam_"): await group_strict_anti_spam_menu(q, int(d.split("_")[4]), context); return
@@ -894,7 +995,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d.startswith("group_triggers_menu_"): await group_triggers_menu(q, int(d.split("_")[3]), context); return
     if d.startswith("group_stats_"): await group_show_stats(q, int(d.split("_")[2]), context); return
     
-    # -- Триггеры --
     if d.startswith("add_trigger_"):
         chat_id = d.split("_")[2]
         user_states[uid] = f"await_trigger_{chat_id}"
@@ -904,7 +1004,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_group_setting(int(d.split("_")[2]), "triggers", {})
         await group_triggers_menu(q, int(d.split("_")[2]), context); return
 
-    # -- Тогглы настроек --
     if d.startswith("toggle_"):
         key, chat_id = "_".join(d.split("_")[1:-1]), int(d.split("_")[-1])
         s = get_group_settings(chat_id)
@@ -924,7 +1023,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await group_link_review_menu(q, chat_id, context)
         return
 
-    # -- Изменение параметров --
     if d.startswith("limit_inc_"): await change_flood_parameter(update, context, "flood_limit", 1, int(d.split("_")[2])); await group_anti_spam_menu(q, int(d.split("_")[2]), context); return
     if d.startswith("limit_dec_"): await change_flood_parameter(update, context, "flood_limit", -1, int(d.split("_")[2])); await group_anti_spam_menu(q, int(d.split("_")[2]), context); return
     if d.startswith("window_inc_"): await change_flood_parameter(update, context, "flood_window", 5, int(d.split("_")[2])); await group_anti_spam_menu(q, int(d.split("_")[2]), context); return
