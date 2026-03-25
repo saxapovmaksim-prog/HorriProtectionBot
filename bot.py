@@ -66,7 +66,15 @@ TARIFF_DESCRIPTIONS = {
         "Максимальная защита:\n"
         "🚀 *Всё из Стандартного*\n"
         "🚀 Проверка ссылок соцсетей админами\n"
-        "🚀 AI-модерация контента"
+        "🚀 AI-модерация контента\n\n"
+        "_Идеально для топовых проектов!_"
+    ),
+    "vip": (
+        "🌟 *VIP-статус пользователя* — 50 руб./мес\n\n"
+        "Дает персональные привилегии во всех чатах бота:\n"
+        "🔸 Полный обход капчи при входе (сразу в чат)\n"
+        "🔸 Увеличенные лимиты на сообщения (х2)\n"
+        "🔸 Отличительная отметка в профиле"
     )
 }
 
@@ -79,7 +87,7 @@ DEFAULT_SETTINGS = {
     "captcha_enabled": False,
     "link_review": {"tg": False, "yt": False, "tt": False, "ig": False, "vk": False},
     "whitelisted_links": {}, 
-    "triggers": {}, # НОВАЯ НАСТРОЙКА: Словарь триггеров {слово: ответ}
+    "triggers": {}, 
     "seen_users": [],
     "ai_enabled": False, "ai_prompt": "Ты модератор чата. Анализируй сообщения на токсичность и спам.", "ai_strictness": 50,
     "stats": {"messages": 0, "violations": 0, "history": []},
@@ -112,11 +120,10 @@ def load_data():
     if os.path.exists(USER_DATA_FILE):
         try:
             with open(USER_DATA_FILE, "r", encoding="utf-8") as f: user_data = json.load(f)
-            # Обновляем старых юзеров, добавляем поля VIP
             for uid in user_data:
                 user_data[uid].setdefault("is_vip", False)
                 user_data[uid].setdefault("vip_expiry", None)
-        except Exception as e: logging.error(f"Ошибка загрузки юзеров: {e}"); user_data = {}
+        except Exception as e: logging.error(f"Ошибка за��рузки юзеров: {e}"); user_data = {}
     else: user_data = {}
 
 def save_data():
@@ -203,10 +210,7 @@ def is_flooding(user_id: int, chat_id: int, strict: bool = False, is_vip: bool =
     settings = get_group_settings(chat_id)
     if not settings: return False
     limit, window = (settings.get("strict_flood_limit", 9), settings.get("strict_flood_window", 3)) if strict else (settings["flood_limit"], settings["flood_window"])
-    
-    # VIP бонус: лимит сообщений х2
     if is_vip: limit *= 2 
-
     timestamps = [ts for ts in user_messages[user_id] if ts > datetime.now() - timedelta(seconds=window)]
     user_messages[user_id] = timestamps
     timestamps.append(datetime.now())
@@ -322,13 +326,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_tariff = get_user_tariff(g["owner"])
         is_vip = check_user_vip(user.id)
         
-        # 1. ТРИГГЕРЫ (Автоответчик) - Работает для Standard и PRO
+        # 1. ТРИГГЕРЫ (Автоответчик)
         if msg.text and owner_tariff in ["standard", "pro"]:
             msg_lower = msg.text.lower()
             for trigger_word, trigger_reply in settings.get("triggers", {}).items():
                 if trigger_word.lower() in msg_lower:
                     await msg.reply_text(trigger_reply)
-                    break # Отвечаем только на 1 триггер за раз
+                    break 
 
         # 2. Антифлуд (С учетом VIP)
         if TARIFF_FEATURES[owner_tariff].get("strict_flood", False) and is_flooding(user.id, chat.id, True, is_vip):
@@ -424,7 +428,7 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
                 )
                 pending_captchas[str(chat.id)][member.id] = sent_msg.message_id
                 asyncio.create_task(captcha_timer(chat.id, member.id, sent_msg.message_id, context))
-            except Exception as e: pass
+            except Exception: pass
         else:
             if settings.get("custom_welcome"):
                 await update.message.reply_text(settings["custom_welcome"].replace("{name}", member.full_name))
@@ -448,9 +452,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
     user_id = update.effective_user.id
     keyboard = [
         [InlineKeyboardButton("👤 Профиль", callback_data="profile"),
-         InlineKeyboardButton("🌟 Купить VIP", callback_data="buy_vip")],
-        [InlineKeyboardButton("📋 Мои группы", callback_data="groups"),
-         InlineKeyboardButton("💰 Тарифы для Групп", callback_data="show_tariffs")]
+         InlineKeyboardButton("📋 Мои группы", callback_data="groups")],
+        [InlineKeyboardButton("💰 Тарифы и VIP", callback_data="show_tariffs")]
     ]
     if user_id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton("👑 Админ панель", callback_data="admin_panel")])
@@ -472,7 +475,7 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"👤 *Ваш профиль*\n\n"
         f"🆔 ID: `{mask_id(user_id)}`\n"
-        f"📅 Регистрация: {reg_date}\n"
+        f"📅 Регистрация: {reg_date}\n\n"
     )
     
     if is_vip:
@@ -534,12 +537,16 @@ async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, query=N
          InlineKeyboardButton("🗣 Триггеры", callback_data=f"group_triggers_menu_{chat_id}")],
         [InlineKeyboardButton("📊 Статистика", callback_data=f"group_stats_{chat_id}")]
     ]
+    
+    # Кнопки возврата / закрытия
     if query and query.message.chat.type == "private":
         keyboard.append([InlineKeyboardButton("🔙 К списку групп", callback_data="groups")])
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     elif query:
+        keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_menu")])
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
+        keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_menu")])
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 # Подменюшки
@@ -663,11 +670,12 @@ async def group_show_stats(query, chat_id, context):
 # ---------- ТАРИФЫ И КРИПТО ОПЛАТА ----------
 async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    text = "*Доступные тарифы для Групп:*\n\n" + "\n\n".join(TARIFF_DESCRIPTIONS.values())
+    text = "*Доступные тарифы и услуги:*\n\n" + "\n\n".join(TARIFF_DESCRIPTIONS.values())
     keyboard = [
         [InlineKeyboardButton("🆓 Бесплатный", callback_data="tariff_info_free")],
         [InlineKeyboardButton("⭐ Стандартный (99 руб)", callback_data="tariff_info_standard")],
         [InlineKeyboardButton("💎 Профессиональный (199 руб)", callback_data="tariff_info_pro")],
+        [InlineKeyboardButton("🌟 VIP для пользователя (50 руб)", callback_data="tariff_info_vip")],
         [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -701,15 +709,15 @@ async def buy_tariff(query, tariff: str, context):
     price_usd = PRICES_USD[tariff]
     name = "VIP Статус" if tariff == "vip" else f"Тариф {tariff.upper()}"
     invoice = create_crypto_invoice(price_usd, f"Активация {name}")
-    if not invoice: return await query.edit_message_text("❌ Ошибка создания счёта.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]))
+    if not invoice: return await query.edit_message_text("❌ Ошибка создания счёта.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]))
     
     invoice_id = str(invoice["invoice_id"])
     pending_payments[invoice_id] = {"user_id": query.from_user.id, "tariff": tariff}
-    keyboard = [[InlineKeyboardButton("💳 Оплатить", url=invoice["pay_url"])], [InlineKeyboardButton("✅ Проверить", callback_data=f"check_payment_{invoice_id}")], [InlineKeyboardButton("❌ Отмена", callback_data="main_menu")]]
+    keyboard = [[InlineKeyboardButton("💳 Оплатить", url=invoice["pay_url"])], [InlineKeyboardButton("✅ Проверить", callback_data=f"check_payment_{invoice_id}")], [InlineKeyboardButton("❌ Отмена", callback_data="show_tariffs")]]
     await query.edit_message_text(f"💸 *Оплата: {name}*\nСтоимость: {PRICES_RUB[tariff]} руб. (≈{price_usd} USD)", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def check_payment(query, invoice_id: str, context):
-    if invoice_id not in pending_payments: return await query.edit_message_text("❌ Счёт не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]))
+    if invoice_id not in pending_payments: return await query.edit_message_text("❌ Счёт не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]))
     info = pending_payments[invoice_id]
     
     if check_invoice_status(invoice_id) == "paid":
@@ -760,8 +768,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg or not msg.text: return
     state = user_states.get(user_id)
     
-    # Добавление триггера
-    if chat.type == "private" and state and state.startswith("await_trigger_"):
+    # Добавлен��е триггера
+    if msg.chat.type == "private" and state and state.startswith("await_trigger_"):
         chat_id = int(state.split("_")[2])
         if "::" not in msg.text:
             return await msg.reply_text("❌ Неверный формат. Напишите: Слово :: Ваш ответ")
@@ -769,7 +777,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         word, reply = word.strip().lower(), reply.strip()
         
         settings = get_group_settings(chat_id)
-        if settings:
+        if settings is not None:
             triggers = settings.setdefault("triggers", {})
             triggers[word] = reply
             update_group_setting(chat_id, "triggers", triggers)
@@ -785,7 +793,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("✅ Промпт ИИ обновлен!")
         return
         
-    if chat.type == "private" and state and state.startswith("welcome_chat_"):
+    if msg.chat.type == "private" and state and state.startswith("welcome_chat_"):
         chat_id = int(state.split("_")[2])
         del user_states[user_id]
         if msg.text.strip(): update_group_setting(chat_id, "custom_welcome", msg.text.strip())
@@ -807,6 +815,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     d = q.data
     uid = q.from_user.id
+
+    if d == "close_menu":
+        try: await q.message.delete()
+        except: pass
+        return
 
     # -- КАПЧА ПРОХОЖДЕНИЕ --
     if d.startswith("captcha_"):
@@ -830,7 +843,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d == "profile": await show_profile(update, context); return
     if d == "groups": await show_groups(update, context); return
     if d == "show_tariffs": await show_tariffs(update, context); return
-    if d == "buy_vip": await buy_tariff(q, "vip", context); return
     if d.startswith("tariff_info_"): await show_tariff_info(q, d.split("_")[2], context); return
     if d.startswith("buy_"): await buy_tariff(q, d.split("_")[1], context); return
     if d.startswith("check_payment_"): await check_payment(q, d.split("_")[2], context); return
@@ -857,7 +869,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if lid in pending_reviews:
             if not await is_group_admin(pending_reviews[lid]["chat_id"], uid, context): return await q.answer("Только для админов!", show_alert=True)
             kb = [[InlineKeyboardButton("Мут 1 ч", callback_data=f"pnsh_m1_{lid}"), InlineKeyboardButton("Мут 24 ч", callback_data=f"pnsh_m24_{lid}")], [InlineKeyboardButton("Бан", callback_data=f"pnsh_b_{lid}"), InlineKeyboardButton("Удалить", callback_data=f"pnsh_d_{lid}")]]
-            await q.edit_message_text("�� Выберите наказание:", reply_markup=InlineKeyboardMarkup(kb))
+            await q.edit_message_text("❌ Выберите наказание:", reply_markup=InlineKeyboardMarkup(kb))
         return
     if d.startswith("pnsh_"):
         action, lid = d.split("_")[1], d.split("_")[2]
