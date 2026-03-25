@@ -25,8 +25,8 @@ ADMIN_ID = 2032012311
 DATA_FILE = "bot_data.json"
 USER_DATA_FILE = "user_data.json"
 
-PRICES_RUB = {"standard": 99, "pro": 199}
-PRICES_USD = {"standard": 0.99, "pro": 1.99}
+PRICES_RUB = {"standard": 99, "pro": 199, "vip": 50}
+PRICES_USD = {"standard": 0.99, "pro": 1.99, "vip": 0.50}
 
 TARIFF_FEATURES = {
     "free": {
@@ -49,31 +49,24 @@ TARIFF_FEATURES = {
 TARIFF_DESCRIPTIONS = {
     "free": (
         "🛡 *Базовый (Free)* — 0 руб.\n\n"
-        "Отличный старт для небольших чатов. Включает основные функции защиты:\n"
-        "🔹 Базовый антиспам и антифлуд\n"
-        "🔹 Удаление сторонних ссылок\n"
-        "🔹 Блокировка пригласительных ссылок\n\n"
-        "_Защитите свой чат от ботов прямо сейчас!_"
+        "Отличный старт. Включает:\n"
+        "🔹 Антиспам и антифлуд\n"
+        "🔹 Удаление ссылок и инвайтов"
     ),
     "standard": (
         "⭐ *Стандартный (Standard)* — 99 руб./мес\n\n"
-        "Продвинутый контроль для активных сообществ:\n"
+        "Продвинутый контроль:\n"
         "🔸 *Всё из Базового тарифа*\n"
-        "🔸 Капча при входе (Защита от набегов)\n"
-        "🔸 Запрет на медиа (фото, видео, стикеры)\n"
-        "🔸 Кастомное приветствие\n"
-        "🔸 Умный фильтр CAPS LOCK\n"
-        "🔸 Строгий антифлуд (9 сообщ. за 3 сек)\n\n"
-        "_Полный порядок в чате!_"
+        "🔸 Капча при входе\n"
+        "🔸 Запрет на медиа и автоответчик (триггеры)\n"
+        "🔸 Кастомное приветствие и фильтр CAPS"
     ),
     "pro": (
         "💎 *Профессиональный (PRO)* — 199 руб./мес\n\n"
-        "Максимальная защита и автоматизация:\n"
-        "🚀 *Всё из Стандартного тарифа*\n"
-        "🚀 Умная проверка ссылок соцсетей (Telegram, YT, TikTok и др.)\n"
-        "🚀 AI-модерация контента (нейросеть)\n"
-        "🚀 Детальная статистика\n\n"
-        "_Идеа��ьно для топовых проектов!_"
+        "Максимальная защита:\n"
+        "🚀 *Всё из Стандартного*\n"
+        "🚀 Проверка ссылок соцсетей админами\n"
+        "🚀 AI-модерация контента"
     )
 }
 
@@ -83,9 +76,10 @@ DEFAULT_SETTINGS = {
     "block_links": True, "block_media": False, "custom_welcome": None,
     "check_files": False, "check_content": False, "caps_filter": False, "caps_threshold": 70,
     "invite_links_block": True,
-    "captcha_enabled": False, # НОВАЯ НАСТРОЙКА: КАПЧА
+    "captcha_enabled": False,
     "link_review": {"tg": False, "yt": False, "tt": False, "ig": False, "vk": False},
     "whitelisted_links": {}, 
+    "triggers": {}, # НОВАЯ НАСТРОЙКА: Словарь триггеров {слово: ответ}
     "seen_users": [],
     "ai_enabled": False, "ai_prompt": "Ты модератор чата. Анализируй сообщения на токсичность и спам.", "ai_strictness": 50,
     "stats": {"messages": 0, "violations": 0, "history": []},
@@ -99,7 +93,7 @@ user_messages: Dict[int, List[datetime]] = defaultdict(list)
 pending_payments: Dict[str, dict] = {}
 user_states: Dict[int, str] = {}
 pending_reviews: Dict[str, dict] = {}
-pending_captchas: Dict[str, Dict[int, int]] = defaultdict(dict) # Хранилище капчи: chat_id -> {user_id: message_id}
+pending_captchas: Dict[str, Dict[int, int]] = defaultdict(dict)
 
 # ---------- ЗАГРУЗКА / СОХРАНЕНИЕ ----------
 def load_data():
@@ -118,18 +112,22 @@ def load_data():
     if os.path.exists(USER_DATA_FILE):
         try:
             with open(USER_DATA_FILE, "r", encoding="utf-8") as f: user_data = json.load(f)
+            # Обновляем старых юзеров, добавляем поля VIP
+            for uid in user_data:
+                user_data[uid].setdefault("is_vip", False)
+                user_data[uid].setdefault("vip_expiry", None)
         except Exception as e: logging.error(f"Ошибка загрузки юзеров: {e}"); user_data = {}
     else: user_data = {}
 
 def save_data():
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f: json.dump(data, f, indent=2, ensure_ascii=False)
-    except Exception as e: logging.error(f"Ошибка сохранения групп: {e}")
+    except Exception: pass
 
 def save_user_data():
     try:
         with open(USER_DATA_FILE, "w", encoding="utf-8") as f: json.dump(user_data, f, indent=2, ensure_ascii=False)
-    except Exception as e: logging.error(f"Ошибка сохранения юзеров: {e}")
+    except Exception: pass
 
 def get_group_data(chat_id: int) -> Dict: return data["groups"].get(str(chat_id))
 def get_group_settings(chat_id: int) -> Dict: 
@@ -142,7 +140,13 @@ def update_group_setting(chat_id: int, key: str, value):
 def register_user(user_id: int) -> Dict:
     uid = str(user_id)
     if uid not in user_data:
-        user_data[uid] = {"registered": datetime.now().isoformat(), "tariff": "pro" if user_id == ADMIN_ID else "free", "expiry": None}
+        user_data[uid] = {
+            "registered": datetime.now().isoformat(), 
+            "tariff": "pro" if user_id == ADMIN_ID else "free", 
+            "expiry": None,
+            "is_vip": True if user_id == ADMIN_ID else False,
+            "vip_expiry": None
+        }
         save_user_data()
     return user_data[uid]
 
@@ -155,12 +159,14 @@ def get_user_tariff(user_id: int) -> str:
             user["tariff"] = "free"; user["expiry"] = None; save_user_data()
     return user["tariff"]
 
-def set_user_tariff(user_id: int, tariff: str, duration_days: int = 30):
+def check_user_vip(user_id: int) -> bool:
     uid = str(user_id)
     if uid not in user_data: register_user(user_id)
-    user_data[uid]["tariff"] = tariff
-    user_data[uid]["expiry"] = (datetime.now() + timedelta(days=duration_days)).isoformat()
-    save_user_data()
+    user = user_data[uid]
+    if user.get("is_vip") and user.get("vip_expiry"):
+        if datetime.now() > datetime.fromisoformat(user["vip_expiry"]):
+            user["is_vip"] = False; user["vip_expiry"] = None; save_user_data()
+    return user.get("is_vip", False)
 
 def create_group(chat_id: int, owner_id: int) -> Dict:
     data["groups"][str(chat_id)] = {"owner": owner_id, "settings": DEFAULT_SETTINGS.copy()}
@@ -169,7 +175,6 @@ def create_group(chat_id: int, owner_id: int) -> Dict:
 
 # ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
 def mask_id(uid) -> str:
-    """Скрывает ID владельца бота от публики"""
     return "[Скрыто]" if str(uid) == str(ADMIN_ID) else str(uid)
 
 def extract_urls(text: str) -> List[str]:
@@ -194,10 +199,14 @@ def is_caps_abuse(text: str, threshold: int = 70) -> bool:
     if not letters: return False
     return (sum(1 for c in letters if c.isupper()) / len(letters)) * 100 > threshold
 
-def is_flooding(user_id: int, chat_id: int, strict: bool = False) -> bool:
+def is_flooding(user_id: int, chat_id: int, strict: bool = False, is_vip: bool = False) -> bool:
     settings = get_group_settings(chat_id)
     if not settings: return False
     limit, window = (settings.get("strict_flood_limit", 9), settings.get("strict_flood_window", 3)) if strict else (settings["flood_limit"], settings["flood_window"])
+    
+    # VIP бонус: лимит сообщений х2
+    if is_vip: limit *= 2 
+
     timestamps = [ts for ts in user_messages[user_id] if ts > datetime.now() - timedelta(seconds=window)]
     user_messages[user_id] = timestamps
     timestamps.append(datetime.now())
@@ -244,12 +253,11 @@ async def mute_user(chat_id: int, user_id: int, duration: int, reason: str, cont
         d_str = f"{duration//86400} дн." if duration >= 86400 else f"{duration//3600} ч." if duration >= 3600 else f"{duration//60} мин." if duration >= 60 else f"{duration} сек."
         await context.bot.send_message(chat_id, f"🔇 Пользователь `{mask_id(user_id)}` получил мут на {d_str}\nПричина: {reason}", parse_mode="Markdown")
         return True
-    except Exception as e: logging.error(f"Мут ошибка: {e}"); return False
+    except Exception as e: return False
 
 async def unmute_user(chat_id, user_id, context):
     try:
         await context.bot.restrict_chat_member(chat_id, user_id, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True, can_add_web_page_previews=True))
-        # Не спамим сообщением о размуте, если это прохождение капчи. Уведомление о размуте обычно вызывается командой админа.
     except Exception: pass
 
 async def ban_user(chat_id: int, user_id: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
@@ -269,43 +277,17 @@ async def unban_user(chat_id, user_id, context):
         await context.bot.send_message(chat_id, f"✅ Пользователь `{mask_id(user_id)}` разбанен.", parse_mode="Markdown")
     except Exception: pass
 
-async def process_admin_text_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg, chat_id = update.effective_message, update.effective_chat.id
-    target = msg.reply_to_message.from_user
-    if target.is_bot: return
-    parts = msg.text.lower().split()
-    cmd = parts[0]
-    try:
-        if cmd == '*мут':
-            dur = parse_duration(parts[1]) if len(parts) > 1 and parts[1][0].isdigit() else 3600
-            rsn = " ".join(parts[2:]) if (len(parts) > 1 and parts[1][0].isdigit()) else " ".join(parts[1:])
-            await mute_user(chat_id, target.id, dur, rsn or "Нарушение правил", context)
-            await msg.delete()
-        elif cmd == '*бан':
-            await ban_user(chat_id, target.id, " ".join(parts[1:]) or "Нарушение правил", context)
-            await msg.delete()
-        elif cmd == '*размут':
-            await unmute_user(chat_id, target.id, context)
-            await context.bot.send_message(chat_id, f"🔊 Пользователь `{mask_id(target.id)}` размучен администратором.", parse_mode="Markdown")
-            await msg.delete()
-        elif cmd == '*разбан':
-            await unban_user(chat_id, target.id, context)
-            await msg.delete()
-    except Exception: pass
-
 # ---------- ТАЙМЕР КАПЧИ ----------
 async def captcha_timer(chat_id: int, user_id: int, message_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Ждем 2 минуты. Если юзер не нажал кнопку - кикаем."""
     await asyncio.sleep(120)
     cid_str = str(chat_id)
     if cid_str in pending_captchas and user_id in pending_captchas[cid_str]:
         try:
             del pending_captchas[cid_str][user_id]
-            await context.bot.ban_chat_member(chat_id, user_id) # Кик
-            await context.bot.unban_chat_member(chat_id, user_id) # Разбан для возможности перезайти
+            await context.bot.ban_chat_member(chat_id, user_id) 
+            await context.bot.unban_chat_member(chat_id, user_id) 
             await context.bot.delete_message(chat_id, message_id)
-        except Exception as e:
-            logging.error(f"Ошибка таймера капчи: {e}")
+        except Exception: pass
 
 # ---------- ЗАЩИТА СООБЩЕНИЙ ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -314,16 +296,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot: return
 
     if chat.type in ("group", "supergroup"):
-        # 0. АВТО-ХИЛ ПАМЯТИ: Если бот забыл группу
         if str(chat.id) not in data["groups"]:
             owner_id = await get_group_owner(chat.id, context)
             if owner_id: create_group(chat.id, owner_id)
-            else: return # Нет прав админа - игнорим
+            else: return
             
         settings = get_group_settings(chat.id)
         if not settings: return
 
-        # 1. Трекинг участников
         if user.id not in settings.setdefault("seen_users", []):
             settings["seen_users"].append(user.id)
             update_group_setting(chat.id, "seen_users", settings["seen_users"])
@@ -331,36 +311,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         settings["stats"]["messages"] += 1
         update_group_setting(chat.id, "stats", settings["stats"])
 
-        # Проверка: если юзер висит в ожидании капчи, удаляем его сообщения (на случай обхода мута)
         if str(chat.id) in pending_captchas and user.id in pending_captchas[str(chat.id)]:
             try: await msg.delete()
             except: pass
             return
 
-        # 2. Текстовые команды админа реплаем
-        if msg.reply_to_message and msg.text and msg.text.lower().startswith(('*мут', '*бан', '*размут', '*разбан')):
-            if await is_group_admin(chat.id, user.id, context):
-                await process_admin_text_command(update, context)
-                return
-
         if await is_group_admin(chat.id, user.id, context): return
 
         g = get_group_data(chat.id)
         owner_tariff = get_user_tariff(g["owner"])
+        is_vip = check_user_vip(user.id)
         
-        # 3. Антифлуд
-        if TARIFF_FEATURES[owner_tariff].get("strict_flood", False) and is_flooding(user.id, chat.id, True):
+        # 1. ТРИГГЕРЫ (Автоответчик) - Работает для Standard и PRO
+        if msg.text and owner_tariff in ["standard", "pro"]:
+            msg_lower = msg.text.lower()
+            for trigger_word, trigger_reply in settings.get("triggers", {}).items():
+                if trigger_word.lower() in msg_lower:
+                    await msg.reply_text(trigger_reply)
+                    break # Отвечаем только на 1 триггер за раз
+
+        # 2. Антифлуд (С учетом VIP)
+        if TARIFF_FEATURES[owner_tariff].get("strict_flood", False) and is_flooding(user.id, chat.id, True, is_vip):
             await mute_user(chat.id, user.id, settings.get("strict_flood_mute", 600), "Строгий флуд", context)
             try: await msg.delete()
             except: pass
             return
-        elif is_flooding(user.id, chat.id):
+        elif is_flooding(user.id, chat.id, False, is_vip):
             await mute_user(chat.id, user.id, settings["flood_mute"], "Флуд", context)
             try: await msg.delete()
             except: pass
             return
 
-        # 4. Проверка Ссылок (ПРО Тариф)
+        # 3. Проверка Ссылок (ПРО)
         if msg.text and owner_tariff == "pro":
             urls = extract_urls(msg.text)
             review_triggered = None
@@ -383,7 +365,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat.id, f"🚨 *Ссылка на проверке*\nОт: {user.full_name} (`{mask_id(user.id)}`)\nТекст: {msg.text}\nСсылка: {review_triggered}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
                 return
 
-        # 5. Обычные ссылки
+        # 4. Обычные ссылки и фильтры
         if settings.get("block_links", True) and msg.text and contains_link(msg.text):
             await mute_user(chat.id, user.id, 60, "Запрещённые ссылки", context)
             try: await msg.delete()
@@ -394,8 +376,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await msg.delete()
             except: pass
             return
-
-        # 6. CAPS и Медиа
         if settings.get("caps_filter", False) and msg.text and is_caps_abuse(msg.text, settings.get("caps_threshold", 70)):
             await mute_user(chat.id, user.id, 1800, "CAPS", context)
             try: await msg.delete()
@@ -406,9 +386,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await msg.delete()
             except: pass
             return
-        if settings.get("check_files", False) and msg.document:
-            await msg.reply_text("📁 Файл отправлен на проверку")
-            await msg.delete()
 
 # ---------- НОВЫЕ УЧАСТНИКИ И КАПЧА ----------
 async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -429,31 +406,29 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
         g = get_group_data(chat.id)
         owner_tariff = get_user_tariff(g["owner"]) if g else "free"
         
-        # Если включена КАПЧА (Доступно на Стандарт и PRO)
+        # VIP-юзеры проходят без капчи!
+        if check_user_vip(member.id):
+            if settings.get("custom_welcome"):
+                await update.message.reply_text(f"🌟 VIP Пользователь зашел в чат!\n" + settings["custom_welcome"].replace("{name}", member.full_name))
+            else:
+                await update.message.reply_text(f"🌟 VIP Пользователь [{member.full_name}](tg://user?id={member.id}) присоединился!", parse_mode="Markdown")
+            continue
+
         if settings.get("captcha_enabled", False) and owner_tariff in ["standard", "pro"]:
             try:
-                # Даем мут
                 await context.bot.restrict_chat_member(chat.id, member.id, permissions=ChatPermissions(can_send_messages=False))
-                
                 kb = [[InlineKeyboardButton("🤖 Я человек", callback_data=f"captcha_{chat.id}_{member.id}")]]
                 sent_msg = await update.message.reply_text(
-                    f"👋 Добро пожаловать, [{member.full_name}](tg://user?id={member.id})!\n\n"
-                    f"⚠️ Чтобы писать в чат, подтвердите, что вы не бот.\n"
-                    f"⏱ У вас есть *2 минуты*.",
-                    reply_markup=InlineKeyboardMarkup(kb),
-                    parse_mode="Markdown"
+                    f"👋 Добро пожаловать, [{member.full_name}](tg://user?id={member.id})!\n\n⚠️ Чтобы писать в чат, подтвердите, что вы не бот.\n⏱ У вас есть *2 минуты*.",
+                    reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"
                 )
-                
                 pending_captchas[str(chat.id)][member.id] = sent_msg.message_id
                 asyncio.create_task(captcha_timer(chat.id, member.id, sent_msg.message_id, context))
-            except Exception as e:
-                logging.error(f"Не удалось выдать капчу: {e}")
+            except Exception as e: pass
         else:
-            # Обычное приветствие, если капча выключена
             if settings.get("custom_welcome"):
                 await update.message.reply_text(settings["custom_welcome"].replace("{name}", member.full_name))
-
-async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat, user = update.effective_chat, update.effective_user
     if chat.type not in ("group", "supergroup"): return
     if not await is_group_admin(chat.id, user.id, context): return
@@ -462,72 +437,6 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = await get_group_owner(chat.id, context) or user.id
     create_group(chat.id, owner_id)
     await update.message.reply_text(f"✅ Группа добавлена! Владелец: `{mask_id(owner_id)}`", parse_mode="Markdown")
-# ---------- КОМАНДЫ МОДЕРАЦИИ ----------
-async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    user = update.effective_user
-    if chat.type not in ("group", "supergroup"): return
-    if not await is_group_admin(chat.id, user.id, context): return
-
-    if not context.args:
-        return await update.message.reply_text("Использование: /mute @пользователь [время]")
-    
-    target = None
-    duration_str = None
-    if context.args[0].startswith('@'):
-        try: target = (await chat.get_member(context.args[0][1:])).user.id
-        except: return await update.message.reply_text("Пользователь не найден.")
-        if len(context.args) > 1: duration_str = context.args[1]
-    else:
-        try: target = int(context.args[0])
-        except: return await update.message.reply_text("Укажите пользователя (ID или @username).")
-        if len(context.args) > 1: duration_str = context.args[1]
-
-    if not target: return await update.message.reply_text("Пользователь не найден.")
-    duration = parse_duration(duration_str)
-    await mute_user(chat.id, target, duration, f"Команда /mute от {mask_id(user.id)}", context)
-
-async def cmd_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat, user = update.effective_chat, update.effective_user
-    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
-    if not context.args: return await update.message.reply_text("Использование: /unmute @пользователь")
-    try: target = (await chat.get_member(context.args[0][1:])).user.id if context.args[0].startswith('@') else int(context.args[0])
-    except: return
-    await unmute_user(chat.id, target, context)
-
-async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat, user = update.effective_chat, update.effective_user
-    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
-    if not context.args: return await update.message.reply_text("Использование: /ban @пользователь")
-    try: target = (await chat.get_member(context.args[0][1:])).user.id if context.args[0].startswith('@') else int(context.args[0])
-    except: return
-    await ban_user(chat.id, target, f"Команда /ban от {mask_id(user.id)}", context)
-
-async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat, user = update.effective_chat, update.effective_user
-    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
-    if not context.args: return await update.message.reply_text("Использование: /unban ID_пользователя")
-    try: target = int(context.args[0])
-    except: return await update.message.reply_text("Укажите числовой ID пользователя.")
-    await unban_user(chat.id, target, context)
-
-async def cmd_warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat, user = update.effective_chat, update.effective_user
-    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
-    if not context.args: return await update.message.reply_text("Использование: /warn @пользователь [причина]")
-    try: target = (await chat.get_member(context.args[0][1:])).user.id if context.args[0].startswith('@') else int(context.args[0])
-    except: return
-    reason = " ".join(context.args[1:]) if len(context.args) > 1 else "Без указания причины"
-    await add_warning(chat.id, target, reason, context)
-
-async def cmd_warns(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat, user = update.effective_chat, update.effective_user
-    if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
-    if not context.args: return await update.message.reply_text("Использование: /warns @пользователь")
-    try: target = (await chat.get_member(context.args[0][1:])).user.id if context.args[0].startswith('@') else int(context.args[0])
-    except: return
-    count = await get_warnings(chat.id, target)
-    await update.message.reply_text(f"📊 У пользователя `{mask_id(target)}` {count} предупреждений.", parse_mode="Markdown")
 
 # ---------- МЕНЮ ЛИЧНЫХ СООБЩЕНИЙ ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -538,9 +447,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message=False, chat_id=None, message_id=None):
     user_id = update.effective_user.id
     keyboard = [
-        [InlineKeyboardButton("👤 Профиль", callback_data="profile")],
-        [InlineKeyboardButton("📋 Мои группы", callback_data="groups")],
-        [InlineKeyboardButton("💰 Тарифы", callback_data="show_tariffs")],
+        [InlineKeyboardButton("👤 Профиль", callback_data="profile"),
+         InlineKeyboardButton("🌟 Купить VIP", callback_data="buy_vip")],
+        [InlineKeyboardButton("📋 Мои группы", callback_data="groups"),
+         InlineKeyboardButton("💰 Тарифы для Групп", callback_data="show_tariffs")]
     ]
     if user_id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton("👑 Админ панель", callback_data="admin_panel")])
@@ -556,14 +466,22 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     user = register_user(user_id)
     tariff = get_user_tariff(user_id)
+    is_vip = check_user_vip(user_id)
     reg_date = datetime.fromisoformat(user["registered"]).strftime("%d.%m.%Y %H:%M")
     
     text = (
         f"👤 *Ваш профиль*\n\n"
         f"🆔 ID: `{mask_id(user_id)}`\n"
         f"📅 Регистрация: {reg_date}\n"
-        f"💎 Тариф: *{tariff.upper()}*\n"
     )
+    
+    if is_vip:
+        text += f"🌟 *VIP-СТАТУС: АКТИВЕН*\n"
+        if user.get("vip_expiry"): text += f"⏱ До: {datetime.fromisoformat(user['vip_expiry']).strftime('%d.%m.%Y')}\n\n"
+    else:
+        text += f"👤 *VIP-СТАТУС: НЕТ* (Купите для обхода капчи и x2 лимитов)\n\n"
+        
+    text += f"💎 Тариф (Для ваших групп): *{tariff.upper()}*\n"
     if tariff != "free" and user.get("expiry"):
         text += f"⏰ Действует до: {datetime.fromisoformat(user['expiry']).strftime('%d.%m.%Y')}\n"
 
@@ -577,22 +495,19 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not data["groups"]:
         await query.edit_message_text(
-            "Нет добавленных групп.\n\n"
-            "Добавьте бота в группу, дайте ему права администратора и отправьте /addgroup",
+            "Нет добавленных групп.\n\nДобавьте бота в группу, дайте ему права администратора и отправьте /addgroup",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
         )
         return
     keyboard = []
     for cid in data["groups"].keys():
-        try:
-            name = (await context.bot.get_chat(int(cid))).title or f"Группа {cid}"
-        except:
-            name = f"Группа {cid}"
+        try: name = (await context.bot.get_chat(int(cid))).title or f"Группа {cid}"
+        except: name = f"Группа {cid}"
         keyboard.append([InlineKeyboardButton(name, callback_data=f"group_main_{cid}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
     await query.edit_message_text("📋 *Список групп:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-# ---------- МЕНЮ И ИНТЕРФЕЙС ГРУППЫ ----------
+# ---------- МЕНЮ ГРУППЫ ----------
 async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None, override_chat_id=None):
     chat_id = override_chat_id or update.effective_chat.id
     user_id = query.from_user.id if query else update.effective_user.id
@@ -609,19 +524,15 @@ async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, query=N
     owner_id = g["owner"]
     tariff = get_user_tariff(owner_id)
 
-    text = (
-        f"🛡 *Настройки группы*\n"
-        f"ID: `{chat_id}`\n"
-        f"Владелец: `{mask_id(owner_id)}` ({tariff.upper()})\n\n"
-        f"Выберите раздел:"
-    )
+    text = f"🛡 *Настройки группы*\nID: `{chat_id}`\nВладелец: `{mask_id(owner_id)}` ({tariff.upper()})\n\nВыберите раздел:"
     keyboard = [
         [InlineKeyboardButton("⚙️ Антиспам", callback_data=f"group_anti_spam_{chat_id}"),
-         InlineKeyboardButton("🔗 Ссылки и Модерация", callback_data=f"group_links_menu_{chat_id}")],
+         InlineKeyboardButton("🔗 Ссылки", callback_data=f"group_links_menu_{chat_id}")],
         [InlineKeyboardButton("🔠 CAPS и Медиа", callback_data=f"group_media_menu_{chat_id}"),
-         InlineKeyboardButton("🤖 Настройка ИИ", callback_data=f"group_ai_menu_{chat_id}")],
+         InlineKeyboardButton("🤖 ИИ", callback_data=f"group_ai_menu_{chat_id}")],
         [InlineKeyboardButton("🚪 Вход и Капча", callback_data=f"group_entrance_menu_{chat_id}"),
-         InlineKeyboardButton("📊 Статистика", callback_data=f"group_stats_{chat_id}")]
+         InlineKeyboardButton("🗣 Триггеры", callback_data=f"group_triggers_menu_{chat_id}")],
+        [InlineKeyboardButton("📊 Статистика", callback_data=f"group_stats_{chat_id}")]
     ]
     if query and query.message.chat.type == "private":
         keyboard.append([InlineKeyboardButton("🔙 К списку групп", callback_data="groups")])
@@ -631,13 +542,12 @@ async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, query=N
     else:
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
+# Подменюшки
 async def group_anti_spam_menu(query, chat_id, context):
-    settings = get_group_settings(chat_id)
-    tariff = get_user_tariff(get_group_data(chat_id)["owner"])
-    is_adv = TARIFF_FEATURES[tariff].get("strict_flood", False)
-    
-    text = (f"*Настройка антиспама*\nБазовый лимит: {settings['flood_limit']} сообщ. за {settings['flood_window']} сек\nМут: {settings['flood_mute']} сек\n")
-    if is_adv: text += (f"\n*Строгий (9/3):*\nЛимит: {settings.get('strict_flood_limit',9)} за {settings.get('strict_flood_window',3)} сек\nМут: {settings.get('strict_flood_mute',600)} сек\n")
+    s = get_group_settings(chat_id)
+    is_adv = TARIFF_FEATURES[get_user_tariff(get_group_data(chat_id)["owner"])].get("strict_flood", False)
+    text = (f"*Настройка антиспама*\nЛимит: {s['flood_limit']} за {s['flood_window']} сек\nМут: {s['flood_mute']} сек\n")
+    if is_adv: text += (f"\n*Строгий (9/3):*\nЛимит: {s.get('strict_flood_limit',9)} за {s.get('strict_flood_window',3)} сек\nМут: {s.get('strict_flood_mute',600)} сек\n")
     
     keyboard = [
         [InlineKeyboardButton("📈 +1", callback_data=f"limit_inc_{chat_id}"), InlineKeyboardButton("📉 -1", callback_data=f"limit_dec_{chat_id}")],
@@ -649,8 +559,8 @@ async def group_anti_spam_menu(query, chat_id, context):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def group_strict_anti_spam_menu(query, chat_id, context):
-    settings = get_group_settings(chat_id)
-    text = (f"*Настройка строгого антиспама*\nЛимит: {settings.get('strict_flood_limit',9)}\nОкно: {settings.get('strict_flood_window',3)} сек\nМут: {settings.get('strict_flood_mute',600)} сек")
+    s = get_group_settings(chat_id)
+    text = (f"*Строгий антиспам*\nЛимит: {s.get('strict_flood_limit',9)}\nОкно: {s.get('strict_flood_window',3)} сек\nМут: {s.get('strict_flood_mute',600)} сек")
     keyboard = [
         [InlineKeyboardButton("📈 +1", callback_data=f"s_limit_inc_{chat_id}"), InlineKeyboardButton("📉 -1", callback_data=f"s_limit_dec_{chat_id}")],
         [InlineKeyboardButton("⏱ +5с", callback_data=f"s_window_inc_{chat_id}"), InlineKeyboardButton("⏱ -5с", callback_data=f"s_window_dec_{chat_id}")],
@@ -660,79 +570,86 @@ async def group_strict_anti_spam_menu(query, chat_id, context):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def group_links_menu(query, chat_id, context):
-    settings = get_group_settings(chat_id)
+    s = get_group_settings(chat_id)
     tariff = get_user_tariff(get_group_data(chat_id)["owner"])
-    text = (f"🔗 *Настройка ссылок*\n\nБлокировка любых ссылок: {'✅' if settings['block_links'] else '❌'}\nБлокировка инвайтов: {'✅' if settings['invite_links_block'] else '❌'}")
+    text = (f"🔗 *Настройка ссылок*\n\nОбычные: {'✅' if s['block_links'] else '❌'}\nИнвайты: {'✅' if s['invite_links_block'] else '❌'}")
     keyboard = [
-        [InlineKeyboardButton(f"Обычные ссылки: {'ВКЛ' if settings['block_links'] else 'ВЫКЛ'}", callback_data=f"toggle_block_links_{chat_id}")],
-        [InlineKeyboardButton(f"Инвайты: {'ВКЛ' if settings['invite_links_block'] else 'ВЫКЛ'}", callback_data=f"toggle_invite_links_block_{chat_id}")]
+        [InlineKeyboardButton(f"Обычные: {'ВКЛ' if s['block_links'] else 'ВЫКЛ'}", callback_data=f"toggle_block_links_{chat_id}")],
+        [InlineKeyboardButton(f"Инвайты: {'ВКЛ' if s['invite_links_block'] else 'ВЫКЛ'}", callback_data=f"toggle_invite_links_block_{chat_id}")]
     ]
     if tariff == "pro": keyboard.append([InlineKeyboardButton("🛡 Умная проверка соцсетей", callback_data=f"group_link_review_{chat_id}")])
-    else: keyboard.append([InlineKeyboardButton("🔒 Проверка соцсетей (Только PRO)", callback_data="noop")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"group_main_{chat_id}")])
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def group_link_review_menu(query, chat_id, context):
-    settings = get_group_settings(chat_id).setdefault("link_review", {"tg": False, "yt": False, "tt": False, "ig": False, "vk": False})
-    text = ("🛡 *Отправка ссылок на проверку админам*\n\nВыберите платформы, ссылки на которые бот будет удалять и отправлять вам в чат с кнопками Одобрить/Отказать:")
+    s = get_group_settings(chat_id).setdefault("link_review", {"tg": False, "yt": False, "tt": False, "ig": False, "vk": False})
+    text = ("🛡 *Отправка ссылок на проверку админам*\nВыберите платформы для перехвата:")
     keyboard = [
-        [InlineKeyboardButton(f"Telegram {'✅' if settings['tg'] else '❌'}", callback_data=f"tog_rev_tg_{chat_id}"), InlineKeyboardButton(f"YouTube {'✅' if settings['yt'] else '❌'}", callback_data=f"tog_rev_yt_{chat_id}")],
-        [InlineKeyboardButton(f"TikTok {'✅' if settings['tt'] else '❌'}", callback_data=f"tog_rev_tt_{chat_id}"), InlineKeyboardButton(f"Insta {'✅' if settings['ig'] else '❌'}", callback_data=f"tog_rev_ig_{chat_id}")],
-        [InlineKeyboardButton(f"VK {'✅' if settings['vk'] else '❌'}", callback_data=f"tog_rev_vk_{chat_id}")],
+        [InlineKeyboardButton(f"Telegram {'✅' if s['tg'] else '❌'}", callback_data=f"tog_rev_tg_{chat_id}"), InlineKeyboardButton(f"YouTube {'✅' if s['yt'] else '❌'}", callback_data=f"tog_rev_yt_{chat_id}")],
+        [InlineKeyboardButton(f"TikTok {'✅' if s['tt'] else '❌'}", callback_data=f"tog_rev_tt_{chat_id}"), InlineKeyboardButton(f"Insta {'✅' if s['ig'] else '❌'}", callback_data=f"tog_rev_ig_{chat_id}")],
+        [InlineKeyboardButton(f"VK {'✅' if s['vk'] else '❌'}", callback_data=f"tog_rev_vk_{chat_id}")],
         [InlineKeyboardButton("🔙 Назад", callback_data=f"group_links_menu_{chat_id}")]
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def group_media_menu(query, chat_id, context):
-    settings = get_group_settings(chat_id)
+    s = get_group_settings(chat_id)
     tariff = get_user_tariff(get_group_data(chat_id)["owner"])
-    text = "🔠 *CAPS и Медиафайлы*"
     keyboard = []
     if TARIFF_FEATURES[tariff]["caps_filter"]:
-        keyboard.append([InlineKeyboardButton(f"CAPS фильтр: {'ВКЛ' if settings['caps_filter'] else 'ВЫКЛ'}", callback_data=f"toggle_caps_filter_{chat_id}")])
-        keyboard.append([InlineKeyboardButton(f"Порог CAPS: {settings.get('caps_threshold',70)}%", callback_data=f"group_caps_threshold_{chat_id}")])
+        keyboard.append([InlineKeyboardButton(f"CAPS фильтр: {'ВКЛ' if s['caps_filter'] else 'ВЫКЛ'}", callback_data=f"toggle_caps_filter_{chat_id}")])
+        keyboard.append([InlineKeyboardButton(f"Порог CAPS: {s.get('caps_threshold',70)}%", callback_data=f"group_caps_threshold_{chat_id}")])
     if TARIFF_FEATURES[tariff]["block_media"]:
-        keyboard.append([InlineKeyboardButton(f"Блок медиа: {'ВКЛ' if settings['block_media'] else 'ВЫКЛ'}", callback_data=f"toggle_block_media_{chat_id}")])
+        keyboard.append([InlineKeyboardButton(f"Блок медиа: {'ВКЛ' if s['block_media'] else 'ВЫКЛ'}", callback_data=f"toggle_block_media_{chat_id}")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"group_main_{chat_id}")])
+    await query.edit_message_text("🔠 *CAPS и Медиафайлы*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def group_caps_threshold_menu(query, chat_id, context):
+    s = get_group_settings(chat_id)
+    keyboard = [[InlineKeyboardButton(f"{t}%", callback_data=f"set_caps_{t}_{chat_id}")] for t in [10, 30, 50, 70, 100]]
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"group_media_menu_{chat_id}")])
+    await query.edit_message_text(f"*Порог CAPS:* {s.get('caps_threshold', 70)}%\nВыберите новый:", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def group_entrance_menu(query, chat_id, context):
+    s = get_group_settings(chat_id)
+    tariff = get_user_tariff(get_group_data(chat_id)["owner"])
+    text = f"🚪 *Настройки Входа*\n\n🤖 Капча: *{'✅ Вкл' if s.get('captcha_enabled') else '❌ Выкл'}*\n👋 Приветствие: *{'✅ Установлено' if s.get('custom_welcome') else '❌ Отключено'}*"
+    keyboard = []
+    if tariff in ["standard", "pro"]:
+        keyboard.append([InlineKeyboardButton(f"Капча: {'ВЫКЛЮЧИТЬ' if s.get('captcha_enabled') else 'ВКЛЮЧИТЬ'}", callback_data=f"toggle_captcha_enabled_{chat_id}")])
+    else: keyboard.append([InlineKeyboardButton("🔒 Капча (Только Standard/PRO)", callback_data="noop")])
+    keyboard.append([InlineKeyboardButton("✏️ Изменить приветствие", callback_data=f"group_set_welcome_{chat_id}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"group_main_{chat_id}")])
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def group_caps_threshold_menu(query, chat_id, context):
-    settings = get_group_settings(chat_id)
-    text = f"*Настройка порога CAPS*\nТекущий порог: {settings.get('caps_threshold', 70)}%\n\nВыберите новый порог:"
-    keyboard = [[InlineKeyboardButton(f"{t}%", callback_data=f"set_caps_{t}_{chat_id}")] for t in [10, 30, 50, 70, 100]]
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"group_media_menu_{chat_id}")])
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-
 async def group_ai_menu(query, chat_id, context):
-    settings = get_group_settings(chat_id)
-    tariff = get_user_tariff(get_group_data(chat_id)["owner"])
-    if tariff != "pro": return await query.answer("🤖 ИИ модерация доступна только на тарифе PRO!", show_alert=True)
-    text = (f"🤖 *��астройки ИИ Модератора*\n\nСостояние: *{'Включен' if settings.get('ai_enabled') else 'Выключен'}*\nСтрогость: {settings.get('ai_strictness', 50)}/100\n\n*Текущий промпт:*\n_{settings.get('ai_prompt', 'Стандартный')}_")
+    s = get_group_settings(chat_id)
+    if get_user_tariff(get_group_data(chat_id)["owner"]) != "pro": return await query.answer("🤖 ИИ модерация доступна только на PRO!", show_alert=True)
+    text = (f"🤖 *ИИ Модератор*\n\nСостояние: *{'Включен' if s.get('ai_enabled') else 'Выключен'}*\nПромпт: _{s.get('ai_prompt', 'Стандартный')}_")
     keyboard = [
-        [InlineKeyboardButton(f"ИИ: {'Выключить' if settings.get('ai_enabled') else 'Включить'}", callback_data=f"toggle_ai_enabled_{chat_id}")],
+        [InlineKeyboardButton(f"ИИ: {'Выключить' if s.get('ai_enabled') else 'Включить'}", callback_data=f"toggle_ai_enabled_{chat_id}")],
         [InlineKeyboardButton("✏️ Изменить промпт", callback_data=f"set_ai_prompt_{chat_id}")],
         [InlineKeyboardButton("🔙 Назад", callback_data=f"group_main_{chat_id}")]
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# МЕНЮ ВХОДА (КАПЧА И ПРИВЕТСТВИЕ)
-async def group_entrance_menu(query, chat_id, context):
-    settings = get_group_settings(chat_id)
-    tariff = get_user_tariff(get_group_data(chat_id)["owner"])
+# МЕНЮ ТРИГГЕРОВ (АВТООТВЕТЧИК)
+async def group_triggers_menu(query, chat_id, context):
+    s = get_group_settings(chat_id)
+    if get_user_tariff(get_group_data(chat_id)["owner"]) not in ["standard", "pro"]: 
+        return await query.answer("🗣 Доступно только на Standard и PRO!", show_alert=True)
     
-    text = "🚪 *Настройки Входа*\n\n"
-    text += f"🤖 Капча от ботов: *{'✅ Включена' if settings.get('captcha_enabled') else '❌ Выключена'}*\n"
-    text += f"👋 Приветствие: *{'✅ Установлено' if settings.get('custom_welcome') else '❌ Отключено'}*"
+    triggers = s.get("triggers", {})
+    text = "🗣 *Автоответчик (Триггеры)*\n\nБот будет отвечать на заданные слова.\n*Текущие триггеры:*\n"
+    for word, reply in list(triggers.items())[:10]:
+        text += f"• `{word}` ➡️ {reply[:15]}...\n"
+    if not triggers: text += "_Нет добавленных триггеров_"
     
-    keyboard = []
-    if tariff in ["standard", "pro"]:
-        keyboard.append([InlineKeyboardButton(f"Капча: {'ВЫКЛЮЧИТЬ' if settings.get('captcha_enabled') else 'ВКЛЮЧИТЬ'}", callback_data=f"toggle_captcha_enabled_{chat_id}")])
-    else:
-        keyboard.append([InlineKeyboardButton("🔒 Капча (Только Standard/PRO)", callback_data="noop")])
-        
-    keyboard.append([InlineKeyboardButton("✏️ Изменить приветствие", callback_data=f"group_set_welcome_{chat_id}")])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"group_main_{chat_id}")])
-    
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить триггер", callback_data=f"add_trigger_{chat_id}")],
+        [InlineKeyboardButton("🗑 Очистить все", callback_data=f"clear_triggers_{chat_id}")],
+        [InlineKeyboardButton("🔙 Назад", callback_data=f"group_main_{chat_id}")]
+    ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def group_show_stats(query, chat_id, context):
@@ -743,10 +660,10 @@ async def group_show_stats(query, chat_id, context):
     for e in stats.get("history", [])[-10:]: text += f"• {datetime.fromisoformat(e['time']).strftime('%d.%m %H:%M')} – {e['reason']}\n"
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=f"group_main_{chat_id}")]]))
 
-# ---------- ТАРИФЫ И ОПЛАТА ----------
+# ---------- ТАРИФЫ И КРИПТО ОПЛАТА ----------
 async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    text = "*Доступные тарифы:*\n\n" + "\n\n".join(TARIFF_DESCRIPTIONS.values()) + "\n\n⏰ *Платные тарифы действуют 1 месяц.*"
+    text = "*Доступные тарифы для Групп:*\n\n" + "\n\n".join(TARIFF_DESCRIPTIONS.values())
     keyboard = [
         [InlineKeyboardButton("🆓 Бесплатный", callback_data="tariff_info_free")],
         [InlineKeyboardButton("⭐ Стандартный (99 руб)", callback_data="tariff_info_standard")],
@@ -756,9 +673,8 @@ async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_tariff_info(query, tariff: str, context):
-    if tariff == "free":
-        return await query.edit_message_text(TARIFF_DESCRIPTIONS["free"] + "\n\n✅ Уже активен по умолчанию.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]))
-    text = TARIFF_DESCRIPTIONS[tariff] + f"\n\nСтоимость: {PRICES_RUB[tariff]} руб. (≈{PRICES_USD[tariff]} USD)\nВыберите действие:"
+    if tariff == "free": return await query.edit_message_text(TARIFF_DESCRIPTIONS["free"] + "\n\n✅ Уже активен по умолчанию.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]))
+    text = TARIFF_DESCRIPTIONS[tariff] + f"\n\nСтоимость: {PRICES_RUB[tariff]} руб. (≈{PRICES_USD[tariff]} USD)\nДействует 30 дней."
     keyboard = [[InlineKeyboardButton("💳 Купить", callback_data=f"buy_{tariff}")], [InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -767,46 +683,57 @@ def create_crypto_invoice(amount_usd: float, description: str) -> Optional[Dict]
     headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN, "Content-Type": "application/json"}
     payload = {"asset": "USDT", "amount": amount_usd, "description": description, "paid_btn_name": "callback", "paid_btn_url": "https://t.me/YourBotUsername"}
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        if response.json().get("ok"): return response.json()["result"]
-    except: pass
+        r = requests.post(url, json=payload, headers=headers, timeout=10)
+        if r.json().get("ok"): return r.json()["result"]
+    except Exception: pass
     return None
 
 def check_invoice_status(invoice_id: str) -> str:
     url = "https://pay.crypt.bot/api/getInvoices"
     headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
     try:
-        response = requests.get(url, headers=headers, params={"invoice_ids": invoice_id}, timeout=10).json()
-        if response.get("ok") and response["result"]["items"]: return response["result"]["items"][0]["status"]
-    except: pass
+        r = requests.get(url, headers=headers, params={"invoice_ids": invoice_id}, timeout=10).json()
+        if r.get("ok") and r["result"]["items"]: return r["result"]["items"][0]["status"]
+    except Exception: pass
     return ""
 
 async def buy_tariff(query, tariff: str, context):
     price_usd = PRICES_USD[tariff]
-    invoice = create_crypto_invoice(price_usd, f"Активация {tariff.upper()}")
-    if not invoice: return await query.edit_message_text("❌ Ошибка создания счёта.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]))
+    name = "VIP Статус" if tariff == "vip" else f"Тариф {tariff.upper()}"
+    invoice = create_crypto_invoice(price_usd, f"Активация {name}")
+    if not invoice: return await query.edit_message_text("❌ Ошибка создания счёта.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]))
+    
     invoice_id = str(invoice["invoice_id"])
     pending_payments[invoice_id] = {"user_id": query.from_user.id, "tariff": tariff}
-    keyboard = [[InlineKeyboardButton("💳 Оплатить", url=invoice["pay_url"])], [InlineKeyboardButton("✅ Проверить оплату", callback_data=f"check_payment_{invoice_id}")], [InlineKeyboardButton("❌ Отмена", callback_data="show_tariffs")]]
-    await query.edit_message_text(f"💸 *Оплата тарифа {tariff.upper()}*\nСтоимость: {PRICES_RUB[tariff]} руб. (≈{price_usd} USD)", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [[InlineKeyboardButton("💳 Оплатить", url=invoice["pay_url"])], [InlineKeyboardButton("✅ Проверить", callback_data=f"check_payment_{invoice_id}")], [InlineKeyboardButton("❌ Отмена", callback_data="main_menu")]]
+    await query.edit_message_text(f"💸 *Оплата: {name}*\nСтоимость: {PRICES_RUB[tariff]} руб. (≈{price_usd} USD)", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def check_payment(query, invoice_id: str, context):
-    if invoice_id not in pending_payments: return await query.edit_message_text("❌ Счёт не найден или устарел.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]))
+    if invoice_id not in pending_payments: return await query.edit_message_text("❌ Счёт не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]))
     info = pending_payments[invoice_id]
+    
     if check_invoice_status(invoice_id) == "paid":
-        set_user_tariff(info["user_id"], info["tariff"], 30)
+        if info["tariff"] == "vip":
+            user = register_user(info["user_id"])
+            user["is_vip"] = True
+            user["vip_expiry"] = (datetime.now() + timedelta(days=30)).isoformat()
+            save_user_data()
+            name = "VIP-Статус"
+        else:
+            set_user_tariff(info["user_id"], info["tariff"], 30)
+            name = f"Тариф {info['tariff'].upper()}"
+            
         del pending_payments[invoice_id]
-        await query.edit_message_text(f"✅ *Оплата подтверждена!*\nТариф {info['tariff'].upper()} активирован.\n", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 В меню", callback_data="main_menu")]]))
+        await query.edit_message_text(f"✅ *Оплата подтверждена!*\n{name} успешно активирован на 30 дней.\n", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 В меню", callback_data="main_menu")]]))
     else: await query.answer("⏳ Оплата пока не обнаружена.", show_alert=True)
 
-# ---------- АДМИН-ПАНЕЛЬ ВЛАДЕЛЬЦА ----------
+# ---------- АДМИН-ПАНЕЛЬ ----------
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if update.effective_user.id != ADMIN_ID: return await query.edit_message_text("⛔ У вас нет доступа.")
+    if update.effective_user.id != ADMIN_ID: return
     keyboard = [
         [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"), InlineKeyboardButton("👥 Пользователи", callback_data="admin_users")],
-        [InlineKeyboardButton("🔍 Найти группу", callback_data="admin_find_group")],
-        [InlineKeyboardButton("📥 Скачать бэкапы", callback_data="admin_backup"), InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("🔍 Найти группу", callback_data="admin_find_group"), InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
     ]
     await query.edit_message_text("👑 *Админ-панель владельца*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -816,52 +743,41 @@ async def admin_stats(query, context):
     for cid, g in data["groups"].items():
         try: name = (await context.bot.get_chat(int(cid))).title
         except: name = f"Группа {cid}"
-        text += f"• {name} (`{cid}`) – владелец `{mask_id(g['owner'])}` ({get_user_tariff(g['owner']).upper()})\n"
+        text += f"• {name} (`{cid}`) – владелец `{mask_id(g['owner'])}`\n"
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
 
 async def admin_users(query, context):
     text = "*👥 Пользователи:*\n"
     for uid, u in user_data.items():
-        text += f"• `{mask_id(uid)}` – {u['tariff'].upper()}, рег: {datetime.fromisoformat(u['registered']).strftime('%d.%m.%Y')}\n"
-        if len(text) > 3500: text += "\n...(показана часть)"; break
+        vip = "🌟 VIP" if u.get("is_vip") else u['tariff'].upper()
+        text += f"• `{mask_id(uid)}` – {vip}, рег: {datetime.fromisoformat(u['registered']).strftime('%d.%m')}\n"
+        if len(text) > 3500: text += "..."; break
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]))
 
-async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    text = update.message.text.replace('/broadcast', '').strip()
-    if not text: return await update.message.reply_text("Использование: /broadcast Текст")
-    await update.message.reply_text("⏳ Рассылка начата...")
-    count = 0
-    for uid in list(user_data.keys()):
-        try: await context.bot.send_message(chat_id=int(uid), text=text); count += 1; await asyncio.sleep(0.05)
-        except: pass
-    await update.message.reply_text(f"✅ Доставлено: {count} пользователям.")
-
-# ---------- ОБРАБОТЧИКИ ТЕКСТА ----------
+# ---------- ОБРАБОТЧИКИ ТЕКСТА (ВВОД) ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg, user_id = update.message, update.effective_user.id
     if not msg or not msg.text: return
     state = user_states.get(user_id)
     
-    if user_id == ADMIN_ID and state == "await_find_group":
-        del user_states[user_id]
-        try:
-            chat_id = int(msg.text.strip())
-            chat_obj = await context.bot.get_chat(chat_id)
-            admins = await context.bot.get_chat_administrators(chat_id)
-            g = get_group_data(chat_id)
-            seen = g["settings"].get("seen_users", []) if g else []
-            owner = next((a.user.id for a in admins if a.status == "creator"), None)
-            
-            text = f"📊 *Группа:* {chat_obj.title} (`{chat_id}`)\n👑 *Владелец:* `{mask_id(owner)}`\n\n🛡 *Админы:*\n"
-            for a in admins: text += f"- {a.user.full_name} (`{mask_id(a.user.id)}`)\n"
-            text += f"\n👥 *Участников в базе: {len(seen)}*\n"
-            for u in seen[:30]: text += f"- `{mask_id(u)}`\n" 
-            if len(seen) > 30: text += f"...и еще {len(seen)-30}"
-            await msg.reply_text(text, parse_mode="Markdown")
-        except Exception as e: await msg.reply_text(f"❌ Ошибка поиска: {e}")
+    # Добавление триггера
+    if chat.type == "private" and state and state.startswith("await_trigger_"):
+        chat_id = int(state.split("_")[2])
+        if "::" not in msg.text:
+            return await msg.reply_text("❌ Неверный формат. Напишите: Слово :: Ваш ответ")
+        word, reply = msg.text.split("::", 1)
+        word, reply = word.strip().lower(), reply.strip()
+        
+        settings = get_group_settings(chat_id)
+        if settings:
+            triggers = settings.setdefault("triggers", {})
+            triggers[word] = reply
+            update_group_setting(chat_id, "triggers", triggers)
+            del user_states[user_id]
+            await msg.reply_text(f"✅ Триггер добавлен!\nЕсли напишут `{word}`, бот ответит: `{reply}`")
         return
 
+    # Остальные обработчики (ИИ, Приветствие)
     if state and state.startswith("await_ai_prompt_"):
         chat_id = int(state.split("_")[3])
         del user_states[user_id]
@@ -896,35 +812,25 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d.startswith("captcha_"):
         parts = d.split("_")
         chat_id, target_uid = int(parts[1]), int(parts[2])
-        
-        if uid != target_uid:
-            return await q.answer("Эта кнопка не для вас! 🤖", show_alert=True)
-            
+        if uid != target_uid: return await q.answer("Эта кнопка не для вас! 🤖", show_alert=True)
         cid_str = str(chat_id)
         if cid_str in pending_captchas and target_uid in pending_captchas[cid_str]:
             del pending_captchas[cid_str][target_uid]
-            
-            # Снимаем мут
-            await context.bot.restrict_chat_member(
-                chat_id, target_uid,
-                permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True, can_add_web_page_previews=True)
-            )
-            
-            # Если есть приветствие - меняем текст на него, если нет - удаляем или пишем успех.
+            await context.bot.restrict_chat_member(chat_id, target_uid, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True, can_add_web_page_previews=True))
             settings = get_group_settings(chat_id)
             if settings and settings.get("custom_welcome"):
-                welcome_text = settings["custom_welcome"].replace("{name}", q.from_user.full_name)
-                await q.edit_message_text(welcome_text)
+                await q.edit_message_text(settings["custom_welcome"].replace("{name}", q.from_user.full_name))
             else:
-                await q.edit_message_text(f"✅ [{q.from_user.full_name}](tg://user?id={uid}) успешно прошел(ла) проверку!", parse_mode="Markdown")
-        else:
-            await q.answer("Время вышло или проверка уже пройдена.", show_alert=True)
+                await q.edit_message_text(f"✅ [{q.from_user.full_name}](tg://user?id={uid}) успешно прошел проверку!", parse_mode="Markdown")
+        else: await q.answer("Время вышло или проверка уже пройдена.", show_alert=True)
         return
 
+    # -- Главное меню и оплаты --
     if d == "main_menu": await show_main_menu(update, context, True, q.message.chat_id, q.message.message_id); return
     if d == "profile": await show_profile(update, context); return
     if d == "groups": await show_groups(update, context); return
     if d == "show_tariffs": await show_tariffs(update, context); return
+    if d == "buy_vip": await buy_tariff(q, "vip", context); return
     if d.startswith("tariff_info_"): await show_tariff_info(q, d.split("_")[2], context); return
     if d.startswith("buy_"): await buy_tariff(q, d.split("_")[1], context); return
     if d.startswith("check_payment_"): await check_payment(q, d.split("_")[2], context); return
@@ -933,15 +839,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d == "admin_stats": await admin_stats(q, context); return
     if d == "admin_users": await admin_users(q, context); return
     if d == "admin_find_group" and uid == ADMIN_ID:
-        user_states[uid] = "await_find_group"
-        await q.message.reply_text("🔍 Введите ID группы:")
-        await q.answer(); return
-    if d == "admin_backup" and uid == ADMIN_ID:
-        if os.path.exists(DATA_FILE): await context.bot.send_document(uid, open(DATA_FILE, 'rb'))
-        if os.path.exists(USER_DATA_FILE): await context.bot.send_document(uid, open(USER_DATA_FILE, 'rb'))
-        return await q.answer("Бэкапы отправлены!")
-    if d == "admin_broadcast" and uid == ADMIN_ID:
-        return await q.edit_message_text("📢 Напишите `/broadcast Ваш текст`", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="admin_panel")]]))
+        user_states[uid] = "await_find_group"; await q.message.reply_text("🔍 Введите ID группы:"); await q.answer(); return
 
     # -- Проверка ссылок --
     if d.startswith("aprv_"):
@@ -952,14 +850,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             wl = get_group_settings(info["chat_id"]).get("whitelisted_links", {})
             wl[info["url"]] = (datetime.now() + timedelta(hours=1)).isoformat()
             update_group_setting(info["chat_id"], "whitelisted_links", wl)
-            await q.edit_message_text(f"✅ Ссылка одобрена администратором {q.from_user.full_name}.")
+            await q.edit_message_text(f"✅ Ссылка одобрена.")
         return
     if d.startswith("rjct_"):
         lid = d.split("_")[1]
         if lid in pending_reviews:
             if not await is_group_admin(pending_reviews[lid]["chat_id"], uid, context): return await q.answer("Только для админов!", show_alert=True)
             kb = [[InlineKeyboardButton("Мут 1 ч", callback_data=f"pnsh_m1_{lid}"), InlineKeyboardButton("Мут 24 ч", callback_data=f"pnsh_m24_{lid}")], [InlineKeyboardButton("Бан", callback_data=f"pnsh_b_{lid}"), InlineKeyboardButton("Удалить", callback_data=f"pnsh_d_{lid}")]]
-            await q.edit_message_text("❌ Выберите наказание:", reply_markup=InlineKeyboardMarkup(kb))
+            await q.edit_message_text("�� Выберите наказание:", reply_markup=InlineKeyboardMarkup(kb))
         return
     if d.startswith("pnsh_"):
         action, lid = d.split("_")[1], d.split("_")[2]
@@ -968,7 +866,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "m1": await mute_user(info["chat_id"], info["user_id"], 3600, "Запрещенная ссылка", context)
             elif action == "m24": await mute_user(info["chat_id"], info["user_id"], 86400, "Запрещенная ссылка", context)
             elif action == "b": await ban_user(info["chat_id"], info["user_id"], "Запрещенная ссылка", context)
-            await q.edit_message_text(f"✅ Наказание применено ({q.from_user.full_name}).")
+            await q.edit_message_text(f"✅ Наказано.")
         return
 
     # -- Групповые меню навигация --
@@ -981,16 +879,25 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d.startswith("group_caps_threshold_"): await group_caps_threshold_menu(q, int(d.split("_")[3]), context); return
     if d.startswith("group_ai_menu_"): await group_ai_menu(q, int(d.split("_")[3]), context); return
     if d.startswith("group_entrance_menu_"): await group_entrance_menu(q, int(d.split("_")[3]), context); return
+    if d.startswith("group_triggers_menu_"): await group_triggers_menu(q, int(d.split("_")[3]), context); return
     if d.startswith("group_stats_"): await group_show_stats(q, int(d.split("_")[2]), context); return
     
+    # -- Триггеры --
+    if d.startswith("add_trigger_"):
+        chat_id = d.split("_")[2]
+        user_states[uid] = f"await_trigger_{chat_id}"
+        await q.message.reply_text("✏️ Отправьте триггер в формате:\n`Слово :: Ответ`\nНапример: `цена :: Прайс в закрепе`", parse_mode="Markdown")
+        await q.answer(); return
+    if d.startswith("clear_triggers_"):
+        update_group_setting(int(d.split("_")[2]), "triggers", {})
+        await group_triggers_menu(q, int(d.split("_")[2]), context); return
+
     # -- Тогглы настроек --
     if d.startswith("toggle_"):
-        key = "_".join(d.split("_")[1:-1])
-        chat_id = int(d.split("_")[-1])
-        settings = get_group_settings(chat_id)
-        if key in settings:
-            update_group_setting(chat_id, key, not settings[key])
-            await q.answer("Изменено!")
+        key, chat_id = "_".join(d.split("_")[1:-1]), int(d.split("_")[-1])
+        s = get_group_settings(chat_id)
+        if key in s:
+            update_group_setting(chat_id, key, not s[key])
             if key in ["block_links", "invite_links_block"]: await group_links_menu(q, chat_id, context)
             elif key in ["caps_filter", "block_media"]: await group_media_menu(q, chat_id, context)
             elif key == "ai_enabled": await group_ai_menu(q, chat_id, context)
@@ -1012,7 +919,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d.startswith("window_dec_"): await change_flood_parameter(update, context, "flood_window", -5, int(d.split("_")[2])); await group_anti_spam_menu(q, int(d.split("_")[2]), context); return
     if d.startswith("mute_inc_"): await change_flood_parameter(update, context, "flood_mute", 30, int(d.split("_")[2])); await group_anti_spam_menu(q, int(d.split("_")[2]), context); return
     if d.startswith("mute_dec_"): await change_flood_parameter(update, context, "flood_mute", -30, int(d.split("_")[2])); await group_anti_spam_menu(q, int(d.split("_")[2]), context); return
-
     if d.startswith("s_limit_inc_"): await change_strict_parameter(update, context, "strict_flood_limit", 1, int(d.split("_")[3])); await group_strict_anti_spam_menu(q, int(d.split("_")[3]), context); return
     if d.startswith("s_limit_dec_"): await change_strict_parameter(update, context, "strict_flood_limit", -1, int(d.split("_")[3])); await group_strict_anti_spam_menu(q, int(d.split("_")[3]), context); return
     if d.startswith("s_window_inc_"): await change_strict_parameter(update, context, "strict_flood_window", 5, int(d.split("_")[3])); await group_strict_anti_spam_menu(q, int(d.split("_")[3]), context); return
@@ -1032,7 +938,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if d.startswith("group_set_welcome_"):
         user_states[uid] = f"welcome_chat_{d.split('_')[3]}"
-        await q.message.reply_text("✏️ Введите текст приветствия.\nИспользуйте `{name}` для подстановки имени пользователя:")
+        await q.message.reply_text("✏️ Введите текст приветствия.\nИспользуйте `{name}` для подстановки имени:")
         await q.answer(); return
 
     await q.answer()
@@ -1051,7 +957,6 @@ def main():
     application.add_handler(CommandHandler(["start", "menu"], start))
     application.add_handler(CommandHandler("addgroup", addgroup))
     application.add_handler(CommandHandler("group_menu", group_menu))
-    application.add_handler(CommandHandler("broadcast", cmd_broadcast))
 
     application.add_handler(CommandHandler("mute", cmd_mute))
     application.add_handler(CommandHandler("unmute", cmd_unmute))
