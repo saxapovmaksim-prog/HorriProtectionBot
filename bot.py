@@ -512,13 +512,16 @@ async def cmd_warns(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📊 У пользователя `{mask_id(target)}` {count} предупреждений.", parse_mode="Markdown")
     async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat, user = update.effective_chat, update.effective_user
-    if chat.type not in ("group", "supergroup"): return
-    if not await is_group_admin(chat.id, user.id, context): return
+    if chat.type not in ("group", "supergroup"):
+        return
+    if not await is_group_admin(chat.id, user.id, context):
+        return
     if get_group_data(chat.id):
-        return await update.message.reply_text("✅ Группа уже добавлена.")
+        await update.message.reply_text("✅ Группа уже добавлена.")
+        return
     owner_id = await get_group_owner(chat.id, context) or user.id
     create_group(chat.id, owner_id)
-    await update.message.reply_text(f"✅ Группа добавлена! Владелец: `{mask_id(owner_id)}`", parse_mode="Markdown")
+    await update.message.reply_text(f"✅ Группа добавлена! Владелец: {owner_id}")
     owner_id = await get_group_owner(chat.id, context) or user.id
     create_group(chat.id, owner_id)
     await update.message.reply_text(f"✅ Группа добавлена! Владелец: `{mask_id(owner_id)}`", parse_mode="Markdown")
