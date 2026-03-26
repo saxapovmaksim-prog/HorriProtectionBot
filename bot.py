@@ -19,14 +19,16 @@ from telegram.ext import (
 )
 
 # ---------- КОНФИГУРАЦИЯ ----------
-TOKEN = "8768850938:AAGXlxCENVXIqUXAJMBG2bl2xgUwNAJOc4Q"
-CRYPTOBOT_TOKEN = "555209:AAvWWWiQt0ERfGAjTGozQDu1HEAZICFi4ZW"
+TOKEN = "8637803848:AAHTK2zzOOtSUV2tsWJLckGYuNWV6tRCJRE"
 ADMIN_ID = 2032012311
 DATA_FILE = "bot_data.json"
 USER_DATA_FILE = "user_data.json"
 
+# --- НАСТРОЙКИ YOOMONEY ---
+YOOMONEY_TOKEN = "ТУТ_БУДЕТ_ТОКЕН_ЮМОНИ"
+YOOMONEY_WALLET = "ТУТ_НОМЕР_ТВОЕГО_КОШЕЛЬКА" # Например: 410011234567890
+
 PRICES_RUB = {"standard": 99, "pro": 199, "vip": 50}
-PRICES_USD = {"standard": 0.99, "pro": 1.99, "vip": 0.50}
 
 TARIFF_FEATURES = {
     "free": {"block_links": True, "block_media": False, "custom_welcome": False, "check_files": False, "check_content": False, "caps_filter": False, "invite_links_block": True, "strict_flood": False, "captcha": False},
@@ -36,9 +38,9 @@ TARIFF_FEATURES = {
 
 TARIFF_DESCRIPTIONS = {
     "free": ("🛡 *Базовый (Free)* — 0 руб.\n\nОтличный старт. Включает:\n🔹 Антиспам и антифлуд\n🔹 Удаление ссылок и инвайтов"),
+    "vip": ("🌟 *VIP-статус пользователя* — 50 руб./мес\n\nДает персональные привилегии во всех чатах бота:\n🔸 Полный обход капчи при входе (сразу в чат)\n🔸 Увеличенные лимиты на сообщения (х2)\n🔸 Отличительная отметка в профиле"),
     "standard": ("⭐ *Стандартный (Standard)* — 99 руб./мес\n\nПродвинутый контроль:\n🔸 *Всё из Базового тарифа*\n🔸 Капча при входе\n🔸 Запрет на медиа и автоответчик (триггеры)\n🔸 Кастомное приветствие и фильтр CAPS"),
-    "pro": ("💎 *Профессиональный (PRO)* — 199 руб./мес\n\nМаксимальная защита:\n🚀 *Всё из Стандартного*\n🚀 Проверка ссылок соцсетей админами\n🚀 AI-модерация контента"),
-    "vip": ("🌟 *VIP-статус пользователя* — 50 руб./мес\n\nДает персональные привилегии во всех чатах бота:\n🔸 Полный обход капчи при входе (сразу в чат)\n🔸 Увеличенные лимиты на сообщения (х2)\n🔸 Отличительная отметка в профиле")
+    "pro": ("💎 *Профессиональный (PRO)* — 199 руб./мес\n\nМаксимальная защита:\n🚀 *Всё из Стандартного*\n🚀 Проверка ссылок соцсетей админами\n🚀 AI-модерация контента")
 }
 
 DEFAULT_SETTINGS = {
@@ -507,7 +509,7 @@ async def cmd_warns(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: return
     count = await get_warnings(chat.id, target)
     await update.message.reply_text(f"📊 У пользователя `{mask_id(target)}` {count} предупреждений.", parse_mode="Markdown")
-async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat, user = update.effective_chat, update.effective_user
     if chat.type not in ("group", "supergroup"): return
     if not await is_group_admin(chat.id, user.id, context): return
@@ -741,7 +743,7 @@ async def group_show_stats(query, chat_id, context):
     for e in stats.get("history", [])[-10:]: text += f"• {datetime.fromisoformat(e['time']).strftime('%d.%m %H:%M')} – {e['reason']}\n"
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=f"group_main_{chat_id}")]]))
 
-# ---------- ТАРИФЫ И КРИПТО ОПЛАТА ----------
+# ---------- ТАРИФЫ И ОПЛАТА ЮMONEY ----------
 async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     text = "*Доступные тарифы и услуги:*\n\n" + "\n\n".join(TARIFF_DESCRIPTIONS.values())
@@ -756,45 +758,57 @@ async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_tariff_info(query, tariff: str, context):
     if tariff == "free": return await query.edit_message_text(TARIFF_DESCRIPTIONS["free"] + "\n\n✅ Уже активен по умолчанию.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]))
-    text = TARIFF_DESCRIPTIONS[tariff] + f"\n\nСтоимость: {PRICES_RUB[tariff]} руб. (≈{PRICES_USD[tariff]} USD)\nДействует 30 дней."
+    text = TARIFF_DESCRIPTIONS[tariff] + f"\n\nСтоимость: {PRICES_RUB[tariff]} руб.\nДействует 30 дней."
     keyboard = [[InlineKeyboardButton("💳 Купить", callback_data=f"buy_{tariff}")], [InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-def create_crypto_invoice(amount_usd: float, description: str) -> Optional[Dict]:
-    url = "https://pay.crypt.bot/api/createInvoice"
-    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN, "Content-Type": "application/json"}
-    payload = {"asset": "USDT", "amount": amount_usd, "description": description, "paid_btn_name": "callback", "paid_btn_url": "https://t.me/YourBotUsername"}
-    try:
-        r = requests.post(url, json=payload, headers=headers, timeout=10)
-        if r.json().get("ok"): return r.json()["result"]
-    except Exception: pass
-    return None
+def generate_yoomoney_link(amount: float, label: str, description: str) -> str:
+    """Генерирует ссылку на прямую оплату картой или кошельком"""
+    return f"https://yoomoney.ru/quickpay/confirm.xml?receiver={YOOMONEY_WALLET}&quickpay-form=shop&targets={description}&paymentType=AC&sum={amount}&label={label}"
 
-def check_invoice_status(invoice_id: str) -> str:
-    url = "https://pay.crypt.bot/api/getInvoices"
-    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
+def check_yoomoney_payment(label: str) -> bool:
+    """Проверяет историю кошелька на наличие оплаты с нужным label"""
     try:
-        r = requests.get(url, headers=headers, params={"invoice_ids": invoice_id}, timeout=10).json()
-        if r.get("ok") and r["result"]["items"]: return r["result"]["items"][0]["status"]
-    except Exception: pass
-    return ""
+        url = "https://yoomoney.ru/api/operation-history"
+        headers = {
+            "Authorization": f"Bearer {YOOMONEY_TOKEN}",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        data = {"label": label}
+        res = requests.post(url, headers=headers, data=data, timeout=10).json()
+        if res.get("operations"): 
+            return True 
+    except Exception as e:
+        logging.error(f"Ошибка проверки ЮMoney: {e}")
+    return False
 
 async def buy_tariff(query, tariff: str, context):
-    price_usd = PRICES_USD[tariff]
+    price_rub = PRICES_RUB[tariff]
     name = "VIP Статус" if tariff == "vip" else f"Тариф {tariff.upper()}"
-    invoice = create_crypto_invoice(price_usd, f"Активация {name}")
-    if not invoice: return await query.edit_message_text("❌ Ошибка создания счёта.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]))
+    invoice_id = str(uuid.uuid4())[:8] 
     
-    invoice_id = str(invoice["invoice_id"])
+    pay_url = generate_yoomoney_link(price_rub, invoice_id, f"Активация {name}")
     pending_payments[invoice_id] = {"user_id": query.from_user.id, "tariff": tariff}
-    keyboard = [[InlineKeyboardButton("💳 Оплатить", url=invoice["pay_url"])], [InlineKeyboardButton("✅ Проверить", callback_data=f"check_payment_{invoice_id}")], [InlineKeyboardButton("❌ Отмена", callback_data="show_tariffs")]]
-    await query.edit_message_text(f"💸 *Оплата: {name}*\nСтоимость: {PRICES_RUB[tariff]} руб. (≈{price_usd} USD)", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    keyboard = [
+        [InlineKeyboardButton("💳 Оплатить (Карта / СБП)", url=pay_url)],
+        [InlineKeyboardButton("✅ Проверить оплату", callback_data=f"check_payment_{invoice_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="show_tariffs" if tariff != "vip" else "main_menu")]
+    ]
+    await query.edit_message_text(
+        f"💸 *Оплата: {name}*\n"
+        f"Стоимость: {price_rub} руб.\n\n"
+        f"_Оплата доступна с любой РФ карты, СБП или кошелька ЮMoney._\n"
+        f"После оплаты нажмите кнопку проверки.", 
+        parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def check_payment(query, invoice_id: str, context):
-    if invoice_id not in pending_payments: return await query.edit_message_text("❌ Счёт не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="show_tariffs")]]))
+    if invoice_id not in pending_payments: 
+        return await query.edit_message_text("❌ Счёт не найден или устарел.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]))
     info = pending_payments[invoice_id]
     
-    if check_invoice_status(invoice_id) == "paid":
+    if check_yoomoney_payment(invoice_id):
         if info["tariff"] == "vip":
             user = register_user(info["user_id"])
             user["is_vip"] = True
@@ -807,7 +821,8 @@ async def check_payment(query, invoice_id: str, context):
             
         del pending_payments[invoice_id]
         await query.edit_message_text(f"✅ *Оплата подтверждена!*\n{name} успешно активирован на 30 дней.\n", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 В меню", callback_data="main_menu")]]))
-    else: await query.answer("⏳ Оплата пока не обнаружена.", show_alert=True)
+    else: 
+        await query.answer("⏳ Оплата пока не обнаружена. Подождите 1-2 минуты и нажмите снова.", show_alert=True)
 
 # ---------- АДМИН-ПАНЕЛЬ ----------
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1078,7 +1093,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    logging.info("✅ Бот запущен и готов к работе!")
+    logging.info("✅ Бот запущен и готов к работе (ЮMoney Версия)!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
