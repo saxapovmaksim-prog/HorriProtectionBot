@@ -519,6 +519,7 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if get_group_data(chat.id):
         await update.message.reply_text("✅ Группа уже добавлена.")
         return
+    
     owner_id = await get_group_owner(chat.id, context) or user.id
     create_group(chat.id, owner_id)
     await update.message.reply_text(f"✅ Группа добавлена! Владелец: `{mask_id(owner_id)}`", parse_mode="Markdown")
