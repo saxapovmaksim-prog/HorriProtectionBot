@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 # ---------- КОНФИГУРАЦИЯ ----------
-TOKEN = "8637803848:AAHTK2zzOOtSUV2tsWJLckGYuNWV6tRCJRE"
+TOKEN = "8768850938:AAHL5Bc0H6AoSc0pbVsW4MMyQBtf3kz9XSI"
 ADMIN_ID = 2032012311
 DATA_FILE = "bot_data.json"
 USER_DATA_FILE = "user_data.json"
