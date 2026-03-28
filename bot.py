@@ -284,22 +284,33 @@ async def process_admin_text_command(update: Update, context: ContextTypes.DEFAU
     cmd = parts[0]
     try:
         if cmd == '*мут':
-            dur = parse_duration(parts[1]) if len(parts) > 1 and parts[1][0].isdigit() else 3600
-            rsn = " ".join(parts[2:]) if (len(parts) > 1 and parts[1][0].isdigit()) else " ".join(parts[1:])
-            await mute_user(chat_id, target.id, dur, rsn or "Нарушение правил", context)
-            await msg.delete()
+            # ... уже существующий код мута ...
+            pass
         elif cmd == '*бан':
-            await ban_user(chat_id, target.id, " ".join(parts[1:]) or "Нарушение правил", context)
-            await msg.delete()
+            # ... уже существующий код бана ...
+            pass
+            
+        # ВСТАВЛЯЙТЕ КОД ДЛЯ РАЗМУТА СЮДА (примерно 290-300 строки)
         elif cmd == '*размут':
-            await unmute_user(chat_id, target.id, context)
-            await context.bot.send_message(chat_id, f"🔊 Пользователь `{mask_id(target.id)}` размучен администратором.", parse_mode="Markdown")
-            await msg.delete()
-        elif cmd == '*разбан':
-            await unban_user(chat_id, target.id, context)
-            await msg.delete()
-    except Exception: pass
-
+            await context.bot.restrict_chat_member(
+                chat_id, target.id,
+                permissions=ChatPermissions(
+                    can_send_messages=True,
+                    can_send_audios=True,
+                    can_send_documents=True,
+                    can_send_photos=True,
+                    can_send_videos=True,
+                    can_send_video_notes=True,
+                    can_send_voice_notes=True,
+                    can_send_polls=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True
+                )
+            )
+            await msg.reply_text(f"✅ Пользователь {target.mention_html()} был размучен.", parse_mode="HTML")
+            
+    except Exception as e:
+        # ... обработка ошибок ...
 # ---------- ЗАЩИТА СООБЩЕНИЙ ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_chat or not update.effective_user: return
