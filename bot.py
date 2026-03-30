@@ -233,6 +233,7 @@ async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
     chat = update.effective_chat
     user = update.effective_user
+    except Exception as e:
     # Проверка на админа
     chat_member = await chat.get_member(user.id)
     if chat_member.status not in ['administrator', 'creator'] and user.id != ADMIN_ID:
