@@ -230,6 +230,7 @@ async def ban_user(chat_id: int, user_id: int, reason: str, context: ContextType
     try:
         await context.bot.ban_chat_member(chat_id, user_id)
 async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
     chat = update.effective_chat
     user = update.effective_user
     # Проверка на админа
