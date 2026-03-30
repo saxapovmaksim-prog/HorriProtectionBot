@@ -281,7 +281,10 @@ async def get_warnings(chat_id, user_id) -> int:
     s = get_group_settings(chat_id)
     if not s: return 0
     warns = s.get("warnings", {}).get(str(user_id), [])
-    return len([w for w in warns if datetime.fromisoformat(w["time"]) > datetime.now() - timedelta(days=7)])async def captcha_timer(chat_id: int, user_id: int, message_id: int, context: ContextTypes.DEFAULT_TYPE):
+    return len([w for w in warns if datetime.fromisoformat(w["time"]) > datetime.now() - timedelta(days=7)])
+
+# ---------- ТАЙМЕР КАПЧИ ----------
+async def captcha_timer(chat_id: int, user_id: int, message_id: int, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.sleep(120)
     cid_str = str(chat_id)
     if cid_str in pending_captchas and user_id in pending_captchas[cid_str]:
