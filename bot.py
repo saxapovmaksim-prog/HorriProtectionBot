@@ -229,35 +229,34 @@ async def unmute_user(chat_id, user_id, context):
 async def ban_user(chat_id: int, user_id: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.ban_chat_member(chat_id, user_id)
-async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-    chat = update.effective_chat
-    user = update.effective_user
-    except Exception as e:
-    # Проверка на админа
-    chat_member = await chat.get_member(user.id)
-    if chat_member.status not in ['administrator', 'creator'] and user.id != ADMIN_ID:
-        await update.message.reply_text("У вас нет прав для размута пользователей.")
-        return
+        await context.bot.send_message(chat_id, f"⛔ Пользователь `{mask_id(user_id)}` забанен.\nПричина: {reason}", parse_mode="Markdown")
+        s = get_group_settings(chat_id)
+        if s:
+            s["stats"]["violations"] += 1
+            s["stats"]["history"].append({"user": user_id, "time": datetime.now().isoformat(), "reason": reason, "duration": 0})
+            update_group_setting(chat_id, "stats", s["stats"])
+    except Exception: pass
 
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Пожалуйста, ответьте на сообщение пользователя, которого хотите размутить, командой /unmute.")
-        return
-
-    target_user = update.message.reply_to_message.from_user
+async def unban_user(chat_id, user_id, context):
     try:
-        await context.bot.restrict_chat_member(
-            chat_id=chat.id,
-            user_id=target_user.id,
-            permissions=ChatPermissions(
-                can_send_messages=True,
-                can_send_audios=True,
-                can_send_documents=True,
-                can_send_photos=True,
-                can_send_videos=True,
-                can_send_video_notes=True,
-                can_send_voice_notes=True,
-                can_send_polls=True,
+        await context.bot.unban_chat_member(chat_id, user_id)
+        await context.bot.send_message(chat_id, f"✅ Пользователь `{mask_id(user_id)}` разбанен.", parse_mode="Markdown")
+    except Exception: pass
+
+async def add_warning(chat_id: int, user_id: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
+    s = get_group_settings(chat_id)
+    if not s: return 0
+    warns = s.setdefault("warnings", {}).setdefault(str(user_id), [])
+    warns = [w for w in warns if datetime.fromisoformat(w["time"]) > datetime.now() - timedelta(days=7)]
+    warns.append({"time": datetime.now().isoformat(), "reason": reason})
+    s["warnings"][str(user_id)] = warns[-10:]
+    update_group_setting(chat_id, "warnings", s["warnings"])
+    await context.bot.send_message(chat_id, f"⚠️ Пользователь `{mask_id(user_id)}` получил предупреждение.\nПричина: {reason}\nВсего: {len(warns)}", parse_mode="Markdown")
+    if len(warns) >= 3:
+        await mute_user(chat_id, user_id, 3600, "3 предупреждения (автомут)", context)
+        s["warnings"][str(user_id)] = []
+        update_group_setting(chat_id, "warnings", s["warnings"])
+    return len(warns)
                 can_send_other_messages=True,
                 can_add_web_page_previews=True
             )
