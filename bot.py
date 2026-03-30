@@ -221,6 +221,26 @@ async def mute_user(chat_id: int, user_id: int, duration: int, reason: str, cont
         return True
     except Exception: return False
 
+# ---------- НАКАЗАНИЯ ----------
+async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
+    await mute_user(chat_id, user_id, duration, reason, context)
+
+async def mute_user(chat_id: int, user_id: int, duration: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        until = datetime.now() + timedelta(seconds=duration)
+        await context.bot.restrict_chat_member(chat_id, user_id, permissions=ChatPermissions(can_send_messages=False), until_date=until)
+        s = get_group_settings(chat_id)
+        if s:
+            s["stats"]["violations"] += 1
+            s["stats"]["history"].append({"user": user_id, "time": datetime.now().isoformat(), "reason": reason, "duration": duration})
+            s["stats"]["history"] = s["stats"]["history"][-100:]
+            update_group_setting(chat_id, "stats", s["stats"])
+
+        d_str = f"{duration//86400} дн." if duration >= 86400 else f"{duration//3600} ч." if duration >= 3600 else f"{duration//60} мин." if duration >= 60 else f"{duration} сек."
+        await context.bot.send_message(chat_id, f"🔇 Пользователь `{mask_id(user_id)}` получил мут на {d_str}\nПричина: {reason}", parse_mode="Markdown")
+        return True
+    except Exception: return False
+
 async def unmute_user(chat_id, user_id, context):
     try:
         await context.bot.restrict_chat_member(chat_id, user_id, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True, can_add_web_page_previews=True))
@@ -257,7 +277,12 @@ async def add_warning(chat_id: int, user_id: int, reason: str, context: ContextT
         s["warnings"][str(user_id)] = []
         update_group_setting(chat_id, "warnings", s["warnings"])
     return len(warns)
-                can_send_other_messages=True,
+
+async def get_warnings(chat_id, user_id) -> int:
+    s = get_group_settings(chat_id)
+    if not s: return 0
+    warns = s.get("warnings", {}).get(str(user_id), [])
+    return len([w for w in warns if datetime.fromisoformat(w["time"]) > datetime.now() - timedelta(days=7)])
                 can_add_web_page_previews=True
             )
         )
