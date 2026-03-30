@@ -229,14 +229,40 @@ async def unmute_user(chat_id, user_id, context):
 async def ban_user(chat_id: int, user_id: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.ban_chat_member(chat_id, user_id)
-        await context.bot.send_message(chat_id, f"⛔ Пользователь `{mask_id(user_id)}` забанен.\nПричина: {reason}", parse_mode="Markdown")
-        s = get_group_settings(chat_id)
-        if s:
-            s["stats"]["violations"] += 1
-            s["stats"]["history"].append({"user": user_id, "time": datetime.now().isoformat(), "reason": reason, "duration": 0})
-            update_group_setting(chat_id, "stats", s["stats"])
-    except Exception: pass
+        async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    user = update.effective_user
+    # Проверка на админа
+    chat_member = await chat.get_member(user.id)
+    if chat_member.status not in ['administrator', 'creator'] and user.id != ADMIN_ID:
+        await update.message.reply_text("У вас нет прав для размута пользователей.")
+        return
 
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Пожалуйста, ответьте на сообщение пользователя, которого хотите размутить, командой /unmute.")
+        return
+
+    target_user = update.message.reply_to_message.from_user
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat.id,
+            user_id=target_user.id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
+        )
+        await update.message.reply_text(f"Пользователь {target_user.first_name} был успешно размучен.")
+    except Exception as e:
+        await update.message.reply_text(f"Не удалось размутить пользователя. Ошибка: {e}")
 async def unban_user(chat_id, user_id, context):
     try:
         await context.bot.unban_chat_member(chat_id, user_id)
