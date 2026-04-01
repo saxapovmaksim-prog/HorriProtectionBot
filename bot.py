@@ -990,8 +990,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cid_str = str(chat_id)
         if cid_str in pending_captchas and target_uid in pending_captchas[cid_str]:
             del pending_captchas[cid_str][target_uid]
-            await context.bot.restrict_chat_member(chat_id, target_uid, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True, can_add_web_page_previews=True))
+            
+            # Новые права для Telegram API
+            perms = ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
+            await context.bot.restrict_chat_member(chat_id, target_uid, permissions=perms)
+            
             settings = get_group_settings(chat_id)
+            if settings and settings.get("custom_welcome"):
+                await q.edit_message_text(settings["custom_welcome"].replace("{name}", q.from_user.full_name))
+            else:
+                await q.edit_message_text(f"✅ [{q.from_user.full_name}](tg://user?id={uid}) успешно прошел проверку!", parse_mode="Markdown")
+        else: await q.answer("Время вышло или проверка уже пройдена.", show_alert=True)
+        return
             if settings and settings.get("custom_welcome"):
                 await q.edit_message_text(settings["custom_welcome"].replace("{name}", q.from_user.full_name))
             else:
