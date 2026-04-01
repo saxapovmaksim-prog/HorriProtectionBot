@@ -8,6 +8,7 @@ import requests
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+from openai import AsyncOpenAI
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -25,7 +26,12 @@ DATA_FILE = "bot_data.json"
 USER_DATA_FILE = "user_data.json"
 YOOMONEY_TOKEN = "4100119421936909.5708C060A9413FE2D03525B0F3C2FFD2780FF9A7B979527712BB947C16BEE28B2728CF9A6B66BC8FF64D030553F5C8BF8310097F3919ED9EF1B53F022E427E95DFC03B407B1F6A7EC8F778E0864DAA392E7D0F9C5DD43C7B1A4EB78EC63D61A8FA21ED6ECA5689326A9FD99951C97F10D998D5F2AA6099DC16E2B87142300ACC"
 YOOMONEY_WALLET = "4100119421936909"
-# --- НАСТРОЙКИ YOOMONEY ---
+
+# НАСТРОЙКИ ИИ (OpenRouter)
+AI_API_KEY = "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"
+AI_BASE_URL = "https://openrouter.ai/api/v1"
+ai_client = AsyncOpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
+
 PRICES_RUB = {"standard": 99, "pro": 199, "vip": 50}
 
 TARIFF_FEATURES = {
@@ -212,26 +218,6 @@ async def mute_user(chat_id: int, user_id: int, duration: int, reason: str, cont
             s["stats"]["history"].append({"user": user_id, "time": datetime.now().isoformat(), "reason": reason, "duration": duration})
             s["stats"]["history"] = s["stats"]["history"][-100:]
             update_group_setting(chat_id, "stats", s["stats"])
-
-        d_str = f"{duration//86400} дн." if duration >= 86400 else f"{duration//3600} ч." if duration >= 3600 else f"{duration//60} мин." if duration >= 60 else f"{duration} сек."
-        await context.bot.send_message(chat_id, f"🔇 Пользователь `{mask_id(user_id)}` получил мут на {d_str}\nПричина: {reason}", parse_mode="Markdown")
-        return True
-    except Exception: return False
-
-# ---------- НАКАЗАНИЯ ----------
-async def restrict_user(chat_id: int, user_id: int, duration: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
-    await mute_user(chat_id, user_id, duration, reason, context)
-
-async def mute_user(chat_id: int, user_id: int, duration: int, reason: str, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        until = datetime.now() + timedelta(seconds=duration)
-        await context.bot.restrict_chat_member(chat_id, user_id, permissions=ChatPermissions(can_send_messages=False), until_date=until)
-        s = get_group_settings(chat_id)
-        if s:
-            s["stats"]["violations"] += 1
-            s["stats"]["history"].append({"user": user_id, "time": datetime.now().isoformat(), "reason": reason, "duration": duration})
-            s["stats"]["history"] = s["stats"]["history"][-100:]
-            update_group_setting(chat_id, "stats", s["stats"])
         d_str = f"{duration//86400} дн." if duration >= 86400 else f"{duration//3600} ч." if duration >= 3600 else f"{duration//60} мин." if duration >= 60 else f"{duration} сек."
         await context.bot.send_message(chat_id, f"🔇 Пользователь `{mask_id(user_id)}` получил мут на {d_str}\nПричина: {reason}", parse_mode="Markdown")
         return True
@@ -291,7 +277,33 @@ async def captcha_timer(chat_id: int, user_id: int, message_id: int, context: Co
             await context.bot.unban_chat_member(chat_id, user_id) 
             await context.bot.delete_message(chat_id, message_id)
         except Exception: pass
-# ---------- ТАЙМЕР КАПЧИ ----------
+
+# ---------- ИИ МОДЕРАЦИЯ ----------
+async def check_message_with_ai(text: str, custom_prompt: str) -> dict:
+    system_prompt = f"""
+    {custom_prompt}
+    Оцени текст пользователя. Ответь СТРОГО в формате JSON, без приветствий.
+    Формат ответа:
+    {{"is_violation": true/false, "reason": "Краткая причина нарушения", "action": "mute/warn/none"}}
+    Если нарушения нет, верни {{"is_violation": false, "reason": "", "action": "none"}}
+    """
+    try:
+        response = await ai_client.chat.completions.create(
+            model="meta-llama/llama-3-8b-instruct:free",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.1
+        )
+        result_text = response.choices[0].message.content.strip()
+        if result_text.startswith("```json"): result_text = result_text[7:-3].strip()
+        elif result_text.startswith("```"): result_text = result_text[3:-3].strip()
+        return json.loads(result_text)
+    except Exception as e:
+        logging.error(f"Ошибка ИИ: {e}")
+        return {"is_violation": False}
+
 # ---------- ТЕКСТОВЫЕ КОМАНДЫ АДМИНА (*мут, *бан) ----------
 async def process_admin_text_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg, chat_id = update.effective_message, update.effective_chat.id
@@ -310,7 +322,7 @@ async def process_admin_text_command(update: Update, context: ContextTypes.DEFAU
             await msg.delete()
         elif cmd == '*размут':
             await unmute_user(chat_id, target.id, context)
-            await context.bot.send_message(chat_id, f"🔊 Пользователь `{mask_id(target.id)}` размучен администратором.", parse_mode="Markdown")
+            await context.bot.send_message(chat_id, f"🔊 Пользователь `{mask_id(target.id)}` размучен.", parse_mode="Markdown")
             await msg.delete()
         elif cmd == '*разбан':
             await unban_user(chat_id, target.id, context)
@@ -422,6 +434,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
             return
 
+        # 5. ИИ-Модерация (Только PRO)
+        if settings.get("ai_enabled", False) and owner_tariff == "pro" and msg.text:
+            ai_prompt = settings.get("ai_prompt", "Ты модератор чата. Анализируй сообщения на токсичность, мат и спам.")
+            verdict = await check_message_with_ai(msg.text, ai_prompt)
+            if verdict.get("is_violation"):
+                action = verdict.get("action", "warn")
+                reason = verdict.get("reason", "Решение ИИ-модератора")
+                if action == "mute":
+                    await mute_user(chat.id, user.id, 3600, f"🤖 ИИ: {reason}", context)
+                    try: await msg.delete()
+                    except: pass
+                else:
+                    await add_warning(chat.id, user.id, f"🤖 ИИ: {reason}", context)
+                return
+
 # ---------- НОВЫЕ УЧАСТНИКИ И КАПЧА ----------
 async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -468,9 +495,7 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
 async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat, user = update.effective_chat, update.effective_user
     if chat.type not in ("group", "supergroup") or not await is_group_admin(chat.id, user.id, context): return
-
     if not context.args: return await update.message.reply_text("Использование: /mute @пользователь [время]")
-    
     target, duration_str = None, None
     if context.args[0].startswith('@'):
         try: target = (await chat.get_member(context.args[0][1:])).user.id
@@ -527,7 +552,6 @@ async def cmd_warns(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: return
     count = await get_warnings(chat.id, target)
     await update.message.reply_text(f"📊 У пользователя `{mask_id(target)}` {count} предупреждений.", parse_mode="Markdown")
-    await update.message.reply_text(f"📊 У пользователя `{mask_id(target)}` {count} предупреждений.", parse_mode="Markdown")
 
 async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat, user = update.effective_chat, update.effective_user
@@ -536,11 +560,6 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if get_group_data(chat.id):
         await update.message.reply_text("✅ Группа уже добавлена.")
         return
-    
-    owner_id = await get_group_owner(chat.id, context) or user.id
-    create_group(chat.id, owner_id)
-    await update.message.reply_text(f"✅ Группа добавлена! Владелец: `{mask_id(owner_id)}`", parse_mode="Markdown")
-    await update.message.reply_text(f"✅ Группа добавлена! Владелец: `{mask_id(owner_id)}`", parse_mode="Markdown")
     owner_id = await get_group_owner(chat.id, context) or user.id
     create_group(chat.id, owner_id)
     await update.message.reply_text(f"✅ Группа добавлена! Владелец: `{mask_id(owner_id)}`", parse_mode="Markdown")
@@ -580,7 +599,6 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🆔 ID: `{mask_id(user_id)}`\n"
         f"📅 Регистрация: {reg_date}\n\n"
     )
-    
     if is_vip:
         text += f"🌟 *VIP-СТАТУС: АКТИВЕН*\n"
         if user.get("vip_expiry"): text += f"⏱ До: {datetime.fromisoformat(user['vip_expiry']).strftime('%d.%m.%Y')}\n\n"
@@ -612,6 +630,7 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(name, callback_data=f"group_main_{cid}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
     await query.edit_message_text("📋 *Список групп:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
 
 # ---------- МЕНЮ ГРУППЫ ----------
 async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None, override_chat_id=None):
