@@ -621,7 +621,6 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     
     for cid_str, g in data.get("groups", {}).items():
-        # Показываем только те группы, где пользователь является владельцем (или если это вы)
         if g.get("owner") == user_id or user_id == ADMIN_ID:
             try: 
                 name = (await context.bot.get_chat(int(cid_str))).title or f"Группа {cid_str}"
@@ -637,8 +636,7 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
-    await query.edit_message_text("📋 *Ваши группы:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")kup(keyboard), parse_mode="Markdown")
-
+    await query.edit_message_text("📋 *Ваши группы:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 # ---------- МЕНЮ ГРУППЫ ----------
 async def group_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None, override_chat_id=None):
