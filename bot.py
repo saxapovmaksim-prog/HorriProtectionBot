@@ -182,11 +182,11 @@ def is_flooding(user_id: int, chat_id: int, strict: bool = False, is_vip: bool =
     return len(timestamps) > limit
 
 async def is_group_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if user_id == ADMIN_ID: return True  # Вы (создатель) всегда имеете 100% доступ ко всему
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         return member.status in ("administrator", "creator")
     except: return False
-
 async def get_group_owner(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
     try:
         for a in await context.bot.get_chat_administrators(chat_id):
@@ -617,19 +617,27 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not data["groups"]:
+    user_id = query.from_user.id
+    keyboard = []
+    
+    for cid_str, g in data.get("groups", {}).items():
+        # Показываем только те группы, где пользователь является владельцем (или если это вы)
+        if g.get("owner") == user_id or user_id == ADMIN_ID:
+            try: 
+                name = (await context.bot.get_chat(int(cid_str))).title or f"Группа {cid_str}"
+            except: 
+                name = f"Группа {cid_str}"
+            keyboard.append([InlineKeyboardButton(name, callback_data=f"group_main_{cid_str}")])
+            
+    if not keyboard:
         await query.edit_message_text(
-            "Нет добавленных групп.\n\nДобавьте бота в группу, дайте ему права администратора и отправьте /addgroup",
+            "У вас нет добавленных групп.\n\nДобавьте бота в свою группу, дайте ему права администратора и отправьте команду /addgroup",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
         )
         return
-    keyboard = []
-    for cid in data["groups"].keys():
-        try: name = (await context.bot.get_chat(int(cid))).title or f"Группа {cid}"
-        except: name = f"Группа {cid}"
-        keyboard.append([InlineKeyboardButton(name, callback_data=f"group_main_{cid}")])
+        
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
-    await query.edit_message_text("📋 *Список групп:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text("📋 *Ваши группы:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")kup(keyboard), parse_mode="Markdown")
 
 
 # ---------- МЕНЮ ГРУППЫ ----------
@@ -977,6 +985,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     d = q.data
     uid = q.from_user.id
+
+    if d == "locked_feature":
+        return await q.answer("🔒 Эта функция недоступна на текущем тарифе владельца группы!", show_alert=True)
+
+    # УНИВЕРСАЛЬНАЯ ЗАЩИТА КНОПОК: Только админы могут нажимать настройки
+    admin_prefixes = (
+        "group_main_", "group_anti_spam_", "group_strict_anti_spam_", 
+        "group_links_menu_", "group_link_review_", "group_media_menu_",
+        "group_caps_threshold_", "group_ai_menu_", "group_entrance_menu_",
+        "group_triggers_menu_", "group_stats_", "add_trigger_", "clear_triggers_",
+        "toggle_", "tog_rev_", "limit_", "window_", "mute_", "s_limit_", 
+        "s_window_", "s_mute_", "set_caps_", "set_ai_prompt_", "group_set_welcome_"
+    )
+    if any(d.startswith(p) for p in admin_prefixes):
+        try:
+            chat_id = int(d.split("_")[-1])
+            if not await is_group_admin(chat_id, uid, context):
+                return await q.answer("⛔ Только администраторы могут настраивать бота!", show_alert=True)
+        except ValueError:
+            pass
 
     if d == "close_menu":
         try: await q.message.delete()
