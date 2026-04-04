@@ -475,8 +475,8 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
             else:
                 await update.message.reply_text(f"🌟 VIP Пользователь [{member.full_name}](tg://user?id={member.id}) присоединился!", parse_mode="Markdown")
             continue
-
-        if settings.get("captcha_enabled", False) and owner_tariff in ["standard", "pro"]:
+                # Убрали проверку тарифа, теперь капча работает во всех группах, где она включена
+        if settings.get("captcha_enabled", False):
             try:
                 await context.bot.restrict_chat_member(chat.id, member.id, permissions=ChatPermissions(can_send_messages=False))
                 kb = [[InlineKeyboardButton("🤖 Я человек", callback_data=f"captcha_{chat.id}_{member.id}")]]
@@ -621,7 +621,8 @@ async def show_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     
     for cid_str, g in data.get("groups", {}).items():
-        if g.get("owner") == user_id or user_id == ADMIN_ID:
+        # Теперь ВСЕ (даже вы) видят в этом меню только те группы, куда они лично добавили бота
+        if g.get("owner") == user_id:
             try: 
                 name = (await context.bot.get_chat(int(cid_str))).title or f"Группа {cid_str}"
             except: 
