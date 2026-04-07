@@ -18,7 +18,7 @@ from telegram.ext import (
 )
 
 # ---------- КОНФИГУРАЦИЯ ----------
-TOKEN = "8768850938:AAGXlxCENVXIqUXAJMBG2bl2xgUwNAJOc4Q"
+TOKEN = "8768850938:AAHL5Bc0H6AoSc0pbVsW4MMyQBtf3kz9XSI"
 CRYPTOBOT_TOKEN = "555209:AAvWWWiQt0ERfGAjTGozQDu1HEAZICFi4ZW"
 ADMIN_ID = 2032012311
 DATA_FILE = "bot_data.json"
